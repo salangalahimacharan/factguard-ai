@@ -1,0 +1,29 @@
+services:
+  # Backend FastAPI Web Service
+  - type: web
+    name: factguard-ai-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+      - key: DEMO_MODE
+        value: "true"
+      - key: LLM_PROVIDER
+        value: "gemini"
+      - key: SEARCH_PROVIDER
+        value: "duckduckgo"
+      - key: DATABASE_URL
+        value: "sqlite+aiosqlite:///./factguard.db"
+
+  # Frontend Static Site
+  - type: static
+    name: factguard-ai-frontend
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0
