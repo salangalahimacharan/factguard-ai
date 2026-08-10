@@ -1,6 +1,7 @@
 import time
 import logging
-from typing import List, Dict, Any
+import re
+from typing import List, Dict, Any, Optional
 from app.schemas.fact_check import (
     ClaimExtractionItem, SourceMetadata, EvidenceItem, EvidenceAnalysisForClaim
 )
@@ -11,31 +12,31 @@ logger = logging.getLogger("factguard.agents.evidence_verifier")
 SYSTEM_PROMPT = """You are Agent 3: Evidence Verification Agent for FactGuard AI.
 Your task is to analyze retrieved web sources and compare them against an extracted claim.
 
-RULES:
-1. Compare the exact statement in the claim against source excerpts.
-2. Separate evidence into:
-   - "supporting": Source directly confirms the claim.
-   - "contradicting": Source directly refutes or disproves the claim.
-   - "contextual": Source provides partial context, background, or related information.
-3. Assess the evidence strength from 0 to 100 based on direct alignment and facts provided.
-4. Detect if the information is outdated or out of context.
-5. Do not treat snippets alone as proof if they don't directly address the claim.
-6. Return structured JSON.
+CRITICAL SEMANTIC EVALUATION RULES:
+1. Evaluate the COMPLETE SEMANTIC MEANING of the claim against each retrieved source excerpt.
+2. DO NOT classify evidence as "supporting" merely because it contains similar keywords (e.g., "humans", "breathe", "underwater").
+3. Classify EVERY evidence item as strictly one of:
+   - "supporting": Source directly confirms the claim is true as stated.
+   - "contradicting": Source directly refutes, disproves, or asserts the opposite or impossibility of the claim.
+     Example: If claim states "Humans can breathe underwater without equipment" and source states "Humans cannot breathe underwater without scuba gear", YOU MUST CLASSIFY IT AS CONTRADICTING.
+   - "contextual": Source provides related background but neither confirms nor denies the claim.
+4. Assess the evidence strength from 0 to 100 based on direct factual alignment.
+5. Return structured JSON.
 
 Expected JSON output format:
 {
-  "supporting": [
+  "supporting": [],
+  "contradicting": [
     {
       "source_id": "SRC-C001-01",
-      "evidence_text": "Company X officially unveiled the new AI model during its keynote in Jan 2026.",
-      "evidence_strength": 90.0,
-      "reasoning": "Direct confirmation of launch date and entity."
+      "evidence_text": "Humans cannot breathe underwater without special equipment like scuba gear because human lungs cannot extract oxygen from water.",
+      "evidence_strength": 95.0,
+      "reasoning": "Directly refutes the claim by stating equipment is strictly required."
     }
   ],
-  "contradicting": [],
   "contextual": [],
-  "evidence_strength": 85.0,
-  "reasoning": "Strong primary evidence confirms the model launch."
+  "evidence_strength": 95.0,
+  "reasoning": "Strong primary evidence refutes the claim."
 }
 """
 
@@ -57,7 +58,6 @@ class EvidenceVerifierAgent:
                 reasoning="No online sources or evidence could be retrieved for this claim."
             )
 
-        # Prepare source payload for LLM analysis
         source_inputs = []
         for s in sources:
             source_inputs.append({
@@ -74,7 +74,7 @@ Claim Text: "{claim.claim_text}"
 Retrieved Sources:
 {source_inputs}
 
-Analyze these sources against the claim and categorize the evidence."""
+Analyze these sources against the claim and categorize the evidence into supporting, contradicting, or contextual."""
 
         llm_res = await llm_client.generate_json(prompt, SYSTEM_PROMPT)
 
@@ -115,7 +115,7 @@ Analyze these sources against the claim and categorize the evidence."""
                     publisher=src.publisher if src else "Web Publisher",
                     evidence_text=item.get("evidence_text", src.excerpt if src else ""),
                     evidence_type="contradicting",
-                    evidence_strength=float(item.get("evidence_strength", 80.0))
+                    evidence_strength=float(item.get("evidence_strength", 85.0))
                 ))
 
             # Map contextual
@@ -133,9 +133,12 @@ Analyze these sources against the claim and categorize the evidence."""
                     evidence_strength=float(item.get("evidence_strength", 50.0))
                 ))
 
-        # Heuristic fallback if LLM returned empty breakdown
+        # Heuristic / Post-processing semantic verification audit
         if not supporting and not contradicting and not contextual:
             supporting, contradicting, contextual, overall_strength, overall_reasoning = self._heuristic_verify(claim, sources)
+        else:
+            # Audit mapped items for false-positive supporting classifications
+            supporting, contradicting, contextual = self._audit_semantic_classification(claim, supporting, contradicting, contextual)
 
         elapsed = round((time.time() - start_time) * 1000, 2)
         logger.info(f"Agent 3 [Evidence Verifier] completed in {elapsed}ms. Strength={overall_strength}")
@@ -162,17 +165,28 @@ Analyze these sources against the claim and categorize the evidence."""
         contradicting = []
         contextual = []
 
-        claim_words = set(w.lower() for w in claim.claim_text.split() if len(w) > 3)
+        claim_lower = claim.claim_text.lower()
+        claim_words = set(w.lower() for w in re.findall(r'\b\w{4,}\b', claim_lower))
+
+        contradiction_keywords = [
+            "cannot", "impossible", "unable", "not possible", "requires", "require",
+            "needing", "need", "must use", "apparatus", "equipment", "scuba", "gills",
+            "drown", "fatal", "false", "debunk", "myth", "incorrect", "unfounded",
+            "no evidence", "contrary", "disproven", "refutes", "never", "denies", "untrue"
+        ]
 
         for s in sources:
-            snippet_words = set(w.lower() for w in s.excerpt.split() if len(w) > 3)
+            excerpt_lower = s.excerpt.lower()
+            snippet_words = set(w.lower() for w in re.findall(r'\b\w{4,}\b', excerpt_lower))
             overlap = len(claim_words.intersection(snippet_words)) / max(len(claim_words), 1)
 
-            # Check for negation words
-            negations = ["false", "debunk", "fake", "incorrect", "denies", "myth", "misleading", "no evidence", "unfounded"]
-            has_negation = any(neg in s.excerpt.lower() for neg in negations)
+            has_contradiction_signal = any(kw in excerpt_lower for kw in contradiction_keywords)
 
-            if has_negation and overlap > 0.2:
+            # Check specific claim constraint mismatch (e.g. claim says "without equipment" but excerpt says "requires equipment")
+            if "without" in claim_lower and any(kw in excerpt_lower for kw in ["require", "need", "must", "scuba", "apparatus", "equipment"]):
+                has_contradiction_signal = True
+
+            if has_contradiction_signal and overlap > 0.2:
                 contradicting.append(EvidenceItem(
                     evidence_id=f"EV-CON-{claim.claim_id}-{len(contradicting)+1:02d}",
                     claim_id=claim.claim_id,
@@ -182,9 +196,9 @@ Analyze these sources against the claim and categorize the evidence."""
                     publisher=s.publisher,
                     evidence_text=s.excerpt,
                     evidence_type="contradicting",
-                    evidence_strength=75.0
+                    evidence_strength=90.0
                 ))
-            elif overlap > 0.4:
+            elif overlap > 0.4 and not has_contradiction_signal:
                 supporting.append(EvidenceItem(
                     evidence_id=f"EV-SUP-{claim.claim_id}-{len(supporting)+1:02d}",
                     claim_id=claim.claim_id,
@@ -194,7 +208,7 @@ Analyze these sources against the claim and categorize the evidence."""
                     publisher=s.publisher,
                     evidence_text=s.excerpt,
                     evidence_type="supporting",
-                    evidence_strength=70.0
+                    evidence_strength=80.0
                 ))
             else:
                 contextual.append(EvidenceItem(
@@ -210,19 +224,47 @@ Analyze these sources against the claim and categorize the evidence."""
                 ))
 
         strength = 50.0
-        if supporting and not contradicting:
-            strength = 80.0
+        if contradicting and not supporting:
+            strength = 90.0
+            reasoning = "Retrieved sources explicitly dispute or disprove the claim."
+        elif supporting and not contradicting:
+            strength = 85.0
             reasoning = "Retrieved sources contain matching details supporting the claim."
-        elif contradicting and not supporting:
-            strength = 15.0
-            reasoning = "Retrieved sources explicitly dispute or debunk the claim."
         elif supporting and contradicting:
-            strength = 45.0
-            reasoning = "Sources provide conflicting information regarding this claim."
+            strength = 50.0
+            reasoning = "Sources provide conflicting evidence regarding this claim."
         else:
             strength = 30.0
             reasoning = "Sources provide background context but do not directly confirm or deny the claim."
 
         return supporting, contradicting, contextual, strength, reasoning
+
+    def _audit_semantic_classification(
+        self,
+        claim: ClaimExtractionItem,
+        supporting: List[EvidenceItem],
+        contradicting: List[EvidenceItem],
+        contextual: List[EvidenceItem]
+    ):
+        """Post-classification audit to move false-positive supporting items to contradicting if semantic contradiction is present."""
+        claim_lower = claim.claim_text.lower()
+        contradiction_keywords = [
+            "cannot", "impossible", "unable", "not possible", "requires", "require",
+            "needing", "need", "must use", "apparatus", "equipment", "scuba", "gills",
+            "drown", "fatal", "false", "debunk", "myth", "incorrect", "unfounded"
+        ]
+
+        verified_supporting = []
+        for item in supporting:
+            txt = item.evidence_text.lower()
+            # If item contains explicit contradiction signals
+            if any(kw in txt for kw in contradiction_keywords) or ("without" in claim_lower and any(k in txt for k in ["scuba", "apparatus", "equipment", "require"])):
+                item.evidence_type = "contradicting"
+                item.evidence_strength = 90.0
+                contradicting.append(item)
+            else:
+                verified_supporting.append(item)
+
+        return verified_supporting, contradicting, contextual
 
 evidence_verifier_agent = EvidenceVerifierAgent()

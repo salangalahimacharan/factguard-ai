@@ -6,7 +6,8 @@ export type VerdictType =
   | 'MISLEADING'
   | 'PARTIALLY TRUE'
   | 'UNVERIFIED'
-  | 'INSUFFICIENT EVIDENCE';
+  | 'INSUFFICIENT EVIDENCE'
+  | 'UNCERTAIN';
 
 export type CredibilityRating = 'Very High' | 'High' | 'Medium' | 'Low' | 'Unknown';
 

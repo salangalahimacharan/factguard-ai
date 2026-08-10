@@ -12,40 +12,39 @@ logger = logging.getLogger("factguard.agents.final_judge")
 SYSTEM_PROMPT = """You are Agent 7: Final Judge Agent for FactGuard AI.
 Your responsibility is to synthesize all findings from prior specialized agents and issue a transparent, evidence-backed verdict.
 
-VERDICT GUIDELINES:
-- VERIFIED: Strong, reliable, high-credibility evidence directly supports the claim.
+VERDICT RULES:
+- VERIFIED: Strong, reliable, high-credibility evidence directly supports the claim with no meaningful contradiction.
 - FALSE: High-credibility reliable evidence clearly disproves or contradicts the claim.
 - MISLEADING: The statement has a kernel of truth but omits vital context, exaggerates details, or uses deceptive framing.
-- PARTIALLY TRUE: Part of the claim is accurate while another part is inaccurate or unverified.
-- UNVERIFIED: No reliable web evidence could be retrieved to confirm or deny the claim.
-- INSUFFICIENT EVIDENCE: The gathered sources are inadequate, low-credibility, vague, or mutually contradictory.
+- PARTIALLY TRUE: Part of the claim is accurate while another part is inaccurate.
+- UNCERTAIN: Available evidence is conflicting, insufficient, irrelevant, or inconclusive.
+- INSUFFICIENT EVIDENCE: The gathered sources are inadequate or missing.
 
 CRITICAL RULES:
-1. Never fabricate or invent citations, URLs, or evidence.
-2. If evidence is inadequate or missing, strictly output "INSUFFICIENT EVIDENCE" or "UNVERIFIED". Do not force a True/False verdict!
-3. Provide a concise, user-readable explanation referencing specific evidence.
-4. Return structured JSON.
+1. If evidence directly refutes or disproves the claim (e.g. claim says "humans can breathe underwater without equipment", evidence says "humans cannot breathe underwater without scuba apparatus"), THE VERDICT MUST BE "FALSE". NEVER RETURN VERIFIED WHEN CONTRADICTING EVIDENCE IS PRESENT.
+2. If evidence is conflicting or inadequate, output "UNCERTAIN" or "INSUFFICIENT EVIDENCE".
+3. Return structured JSON.
 
 Expected JSON output format:
 {
-  "overall_verdict": "VERIFIED",
-  "confidence_score": 88.0,
-  "summary": "The claim is supported by official announcements and reputable news reporting.",
-  "key_context": "The announcement occurred during the annual technical keynote.",
-  "limitations": "Analysis based on public web sources available as of current date.",
+  "overall_verdict": "FALSE",
+  "confidence_score": 90.0,
+  "summary": "Scientific evidence confirms humans cannot breathe underwater without specialized breathing equipment.",
+  "key_context": "Human lungs lack gills and cannot extract oxygen directly from water.",
+  "limitations": "Analysis based on established biological facts and public scientific literature.",
   "claim_verdicts": [
     {
       "claim_id": "C001",
-      "verdict": "VERIFIED",
+      "verdict": "FALSE",
       "confidence_score": 90.0,
-      "explanation": "Primary press releases confirm the model launch in Jan 2026."
+      "explanation": "Scientific literature disproves the claim by confirming humans require artificial apparatus to breathe underwater."
     }
   ]
 }
 """
 
 class FinalJudgeAgent:
-    """Agent 7: The Orchestration Final Judge synthesizing all evidence, credibility, and bias reports into transparent verdicts."""
+    """Agent 7: The Orchestration Final Judge synthesizing all evidence, credibility, and bias reports into transparent verdicts with Step 8 Validation."""
 
     async def run(
         self,
@@ -59,7 +58,6 @@ class FinalJudgeAgent:
         start_time = time.time()
         logger.info(f"Agent 7 [Final Judge] synthesizing final verdict for {len(claims)} claims...")
 
-        # Build comprehensive synthesis context for LLM
         synthesis_input = []
         for claim in claims:
             cid = claim.claim_id
@@ -74,6 +72,7 @@ class FinalJudgeAgent:
                 "high_credibility_sources": [s.publisher for s in sources if s.credibility_score >= 70.0],
                 "supporting_evidence_count": len(ev.supporting_evidence) if ev else 0,
                 "contradicting_evidence_count": len(ev.contradicting_evidence) if ev else 0,
+                "contradicting_excerpts": [item.evidence_text for item in ev.contradicting_evidence] if ev else [],
                 "evidence_strength": ev.evidence_strength if ev else 0.0,
                 "evidence_reasoning": ev.reasoning if ev else "",
                 "cross_source_consistency_score": cons.consistency_score if cons else 0.0,
@@ -103,7 +102,7 @@ Synthesize these findings and produce the final verdicts."""
                 ev = claim_evidence.get(cid)
                 cons = claim_consistency.get(cid)
 
-                v_str = cv.get("verdict", "INSUFFICIENT EVIDENCE").upper()
+                v_str = cv.get("verdict", "UNCERTAIN").upper()
                 verdict_enum = self._parse_verdict(v_str)
 
                 claim_verdicts.append(ClaimVerdict(
@@ -123,6 +122,11 @@ Synthesize these findings and produce the final verdicts."""
         if not claim_verdicts:
             claim_verdicts = self._heuristic_judge_claims(claims, claim_sources, claim_evidence, claim_consistency, bias_analysis)
 
+        # -------------------------------------------------------------
+        # STEP 8: VERDICT VALIDATION AUDIT (Prevents Logically Flawed Verdicts)
+        # -------------------------------------------------------------
+        claim_verdicts = self._validate_and_finalize_verdicts(claim_verdicts, bias_analysis)
+
         # Determine overall verdict
         overall_verdict, overall_confidence, overall_summary = self._compute_overall_verdict(claim_verdicts, bias_analysis)
 
@@ -138,6 +142,78 @@ Synthesize these findings and produce the final verdicts."""
             "claim_verdicts": claim_verdicts
         }
 
+    def _validate_and_finalize_verdicts(
+        self,
+        claim_verdicts: List[ClaimVerdict],
+        bias_analysis: BiasAnalysisResult
+    ) -> List[ClaimVerdict]:
+        """
+        Step 8: Final Verdict Validation Step
+        Audits every claim verdict against evidence to ensure strict logical consistency.
+        """
+        validated = []
+        for cv in claim_verdicts:
+            ev = cv.evidence_breakdown
+            num_sup = len(ev.supporting_evidence) if ev else 0
+            num_con = len(ev.contradicting_evidence) if ev else 0
+            sources = cv.sources
+
+            # Rule 1: Strong contradicting evidence + no meaningful support -> MUST BE FALSE
+            if num_con > 0 and num_sup == 0:
+                cv.verdict = VerdictType.FALSE
+                publisher_name = ev.contradicting_evidence[0].publisher if ev and ev.contradicting_evidence else "web research"
+                cv.explanation = f"Retrieved reliable evidence ({publisher_name}) explicitly contradicts the claim."
+            # Rule 2: Strong supporting evidence + no contradiction -> VERIFIED
+            elif num_sup > 0 and num_con == 0:
+                if bias_analysis.has_bias and bias_analysis.missing_context:
+                    cv.verdict = VerdictType.MISLEADING
+                else:
+                    cv.verdict = VerdictType.VERIFIED
+            # Rule 3: Conflicting evidence on both sides -> UNCERTAIN
+            elif num_sup > 0 and num_con > 0:
+                cv.verdict = VerdictType.UNCERTAIN
+                cv.explanation = f"Conflicting evidence detected across retrieved sources ({num_sup} supporting vs {num_con} contradicting)."
+            # Rule 4: Insufficient or irrelevant evidence -> UNCERTAIN / INSUFFICIENT EVIDENCE
+            elif num_sup == 0 and num_con == 0:
+                cv.verdict = VerdictType.UNCERTAIN
+                cv.explanation = "Insufficient or irrelevant reliable evidence could be retrieved to confirm or deny this claim."
+
+            # Calculate dynamic confidence (Requirement 7)
+            cv.confidence_score = self._calculate_dynamic_confidence(ev, sources, cv.consistency, cv.verdict)
+            validated.append(cv)
+
+        return validated
+
+    def _calculate_dynamic_confidence(
+        self,
+        ev: Optional[EvidenceAnalysisForClaim],
+        sources: List[SourceMetadata],
+        cons: Optional[ConsistencyCheckResult],
+        verdict: VerdictType
+    ) -> float:
+        """Requirement 7: Calculates dynamic confidence score from evidence strength, credibility, and consistency."""
+        if not sources or not ev:
+            return 50.0
+
+        high_cred_sources = [s for s in sources if s.credibility_score >= 70.0]
+        avg_cred = sum(s.credibility_score for s in sources) / len(sources) if sources else 50.0
+
+        if verdict == VerdictType.FALSE:
+            con_strengths = [item.evidence_strength for item in ev.contradicting_evidence]
+            avg_con_strength = sum(con_strengths) / len(con_strengths) if con_strengths else 85.0
+            confidence = 0.4 * avg_con_strength + 0.4 * avg_cred + 0.2 * (min(len(high_cred_sources), 3) * 10)
+        elif verdict == VerdictType.VERIFIED:
+            sup_strengths = [item.evidence_strength for item in ev.supporting_evidence]
+            avg_sup_strength = sum(sup_strengths) / len(sup_strengths) if sup_strengths else 80.0
+            cons_score = cons.consistency_score if cons else 50.0
+            confidence = 0.4 * avg_sup_strength + 0.3 * avg_cred + 0.3 * cons_score
+        elif verdict in (VerdictType.UNCERTAIN, VerdictType.INSUFFICIENT_EVIDENCE, VerdictType.UNVERIFIED):
+            confidence = 50.0 + (min(len(sources), 2) * 5.0)
+        else:
+            confidence = 70.0
+
+        return round(max(35.0, min(confidence, 98.0)), 1)
+
     def _parse_verdict(self, v_str: str) -> VerdictType:
         if "VERIFIED" in v_str or "TRUE" == v_str:
             return VerdictType.VERIFIED
@@ -147,6 +223,8 @@ Synthesize these findings and produce the final verdicts."""
             return VerdictType.MISLEADING
         elif "PARTIALLY" in v_str:
             return VerdictType.PARTIALLY_TRUE
+        elif "UNCERTAIN" in v_str:
+            return VerdictType.UNCERTAIN
         elif "UNVERIFIED" in v_str:
             return VerdictType.UNVERIFIED
         else:
@@ -170,45 +248,27 @@ Synthesize these findings and produce the final verdicts."""
 
             num_sup = len(ev.supporting_evidence) if ev else 0
             num_con = len(ev.contradicting_evidence) if ev else 0
-            ev_strength = ev.evidence_strength if ev else 0.0
 
-            high_cred_sources = [s for s in sources if s.credibility_score >= 70.0]
-
-            if not sources or ev_strength < 20.0 or (num_sup == 0 and num_con == 0 and not high_cred_sources):
-                verdict = VerdictType.INSUFFICIENT_EVIDENCE
-                confidence = 85.0
-                explanation = "Insufficient reliable online evidence could be retrieved to verify or disprove this claim."
-            elif num_con > 0 and num_sup == 0:
+            if num_con > 0 and num_sup == 0:
                 verdict = VerdictType.FALSE
-                confidence = min(70.0 + (len(high_cred_sources) * 10.0), 95.0)
-                explanation = "Retrieved high-credibility sources explicitly disprove or refute this claim."
-            elif num_sup > 0 and num_con == 0 and len(high_cred_sources) > 0:
-                if bias_analysis.has_bias and bias_analysis.missing_context:
-                    verdict = VerdictType.MISLEADING
-                    confidence = 80.0
-                    explanation = "The core statement has factual basis, but the surrounding post presents it in a misleading manner with missing context."
-                else:
-                    verdict = VerdictType.VERIFIED
-                    confidence = min(75.0 + (len(high_cred_sources) * 8.0), 95.0)
-                    explanation = "Retrieved reliable sources and primary reporting confirm the claim."
+                explanation = "Retrieved high-credibility evidence explicitly refutes or disproves this claim."
+            elif num_sup > 0 and num_con == 0:
+                verdict = VerdictType.VERIFIED
+                explanation = "Retrieved reliable sources and primary reporting confirm the claim."
             elif num_sup > 0 and num_con > 0:
-                verdict = VerdictType.PARTIALLY_TRUE
-                confidence = 70.0
-                explanation = "Sources provide conflicting information; parts of the statement are supported while other parts are challenged."
-            elif (bias_analysis.clickbait_framing or bias_analysis.sensational_language) and num_sup > 0:
-                verdict = VerdictType.MISLEADING
-                confidence = 75.0
-                explanation = "The claim uses sensationalized framing or clickbait language that exaggerates the underlying facts."
+                verdict = VerdictType.UNCERTAIN
+                explanation = "Conflicting evidence exists across retrieved sources."
             else:
-                verdict = VerdictType.UNVERIFIED
-                confidence = 60.0
-                explanation = "Available evidence provides background context but does not conclusively verify the claim."
+                verdict = VerdictType.UNCERTAIN
+                explanation = "Insufficient or irrelevant evidence could be retrieved."
+
+            confidence = self._calculate_dynamic_confidence(ev, sources, cons, verdict)
 
             results.append(ClaimVerdict(
                 claim_id=cid,
                 claim_text=claim.claim_text,
                 verdict=verdict,
-                confidence_score=round(confidence, 1),
+                confidence_score=confidence,
                 explanation=explanation,
                 supporting_sources_count=num_sup,
                 contradicting_sources_count=num_con,
@@ -225,7 +285,7 @@ Synthesize these findings and produce the final verdicts."""
         bias_analysis: BiasAnalysisResult
     ) -> tuple[VerdictType, float, str]:
         if not claim_verdicts:
-            return VerdictType.INSUFFICIENT_EVIDENCE, 90.0, "No claims extracted for analysis."
+            return VerdictType.UNCERTAIN, 50.0, "No claims extracted for analysis."
 
         verdicts = [cv.verdict for cv in claim_verdicts]
         confidences = [cv.confidence_score for cv in claim_verdicts]
@@ -235,23 +295,16 @@ Synthesize these findings and produce the final verdicts."""
             overall = VerdictType.VERIFIED
             summary = "All extracted claims were verified against reliable external evidence sources."
         elif any(v == VerdictType.FALSE for v in verdicts):
-            if any(v == VerdictType.VERIFIED for v in verdicts):
-                overall = VerdictType.PARTIALLY_TRUE
-                summary = "The submission contains a mixture of verified facts and false statements."
-            else:
-                overall = VerdictType.FALSE
-                summary = "The primary claim is contradicted by credible external sources."
+            overall = VerdictType.FALSE
+            summary = "The claim is contradicted and disproven by credible external evidence."
+        elif any(v == VerdictType.UNCERTAIN for v in verdicts):
+            overall = VerdictType.UNCERTAIN
+            summary = "Evidence for the claim is conflicting, insufficient, or inconclusive."
         elif any(v == VerdictType.MISLEADING for v in verdicts):
             overall = VerdictType.MISLEADING
-            summary = "The content presents factual elements in a misleading or sensationalized context."
-        elif any(v == VerdictType.PARTIALLY_TRUE for v in verdicts):
-            overall = VerdictType.PARTIALLY_TRUE
-            summary = "The claim is partially accurate but incomplete."
-        elif all(v in (VerdictType.INSUFFICIENT_EVIDENCE, VerdictType.UNVERIFIED) for v in verdicts):
-            overall = VerdictType.INSUFFICIENT_EVIDENCE
-            summary = "Insufficient reliable online evidence was found to confirm or deny the claim."
+            summary = "The content presents factual elements in a misleading context."
         else:
-            overall = VerdictType.UNVERIFIED
+            overall = VerdictType.UNCERTAIN
             summary = "Evidence is inconclusive at this time."
 
         return overall, avg_confidence, summary

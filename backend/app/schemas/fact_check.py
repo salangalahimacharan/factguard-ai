@@ -15,6 +15,7 @@ class VerdictType(str, Enum):
     PARTIALLY_TRUE = "PARTIALLY TRUE"
     UNVERIFIED = "UNVERIFIED"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT EVIDENCE"
+    UNCERTAIN = "UNCERTAIN"
 
 class CredibilityRating(str, Enum):
     VERY_HIGH = "Very High"

@@ -82,7 +82,8 @@ class ClaimExtractorAgent:
 
     def _heuristic_extract(self, text: str) -> List[ClaimExtractionItem]:
         """Rule-based atomic claim splitter fallback."""
-        sentences = [s.strip() for s in re.split(r'[.!?\n]+', text) if len(s.strip()) > 10]
+        # Preserve decimals (e.g. 1.0%) when splitting sentences
+        sentences = [s.strip() for s in re.split(r'(?<!\d)\.(?!\d)|[!?\n]+', text) if len(s.strip()) > 10]
         if not sentences:
             sentences = [text.strip()]
 

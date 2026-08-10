@@ -35,6 +35,7 @@ export const VerdictBadge: React.FC<VerdictBadgeProps> = ({ verdict, size = 'md'
           bg: 'bg-sky-950/80 border-sky-500/50 text-sky-300',
           icon: <HelpCircle className="w-4 h-4 text-sky-400" />
         };
+      case 'UNCERTAIN':
       case 'INSUFFICIENT EVIDENCE':
       default:
         return {
