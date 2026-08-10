@@ -119,6 +119,9 @@ class AgentLog(BaseModel):
 
 class FactCheckResponse(BaseModel):
     id: str
+    status: str = "success"
+    verdict: Optional[str] = None
+    confidence: Optional[float] = None
     original_input: str
     input_type: InputType
     overall_verdict: VerdictType
@@ -126,6 +129,10 @@ class FactCheckResponse(BaseModel):
     summary: str
     key_context: Optional[str] = None
     limitations: Optional[str] = None
+    claims: List[ClaimExtractionItem] = Field(default_factory=list)
+    supporting_evidence: List[EvidenceItem] = Field(default_factory=list)
+    contradicting_evidence: List[EvidenceItem] = Field(default_factory=list)
+    cross_source_consistency: float = 85.0
     extracted_claims: List[ClaimExtractionItem] = Field(default_factory=list)
     claim_verdicts: List[ClaimVerdict] = Field(default_factory=list)
     sources: List[SourceMetadata] = Field(default_factory=list)

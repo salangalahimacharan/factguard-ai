@@ -1,14 +1,15 @@
+import asyncio
 import time
-import uuid
 import logging
-from typing import List, Dict, Any, Optional
+import uuid
 from datetime import datetime
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List, Dict, Any, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.fact_check import (
-    FactCheckRequest, FactCheckResponse, InputType, VerdictType, AgentLog,
-    ClaimExtractionItem, SourceMetadata, EvidenceAnalysisForClaim,
-    BiasAnalysisResult, ConsistencyCheckResult, ClaimVerdict
+    FactCheckRequest, FactCheckResponse, ClaimExtractionItem, SourceMetadata,
+    EvidenceAnalysisForClaim, BiasAnalysisResult, ConsistencyCheckResult,
+    ClaimVerdict, AgentLog, VerdictType, InputType, EvidenceItem
 )
 from app.agents.claim_extractor import claim_extractor_agent
 from app.agents.researcher import research_agent
@@ -17,15 +18,13 @@ from app.agents.source_credibility import source_credibility_agent
 from app.agents.bias_detector import bias_detector_agent
 from app.agents.consistency_checker import consistency_checker_agent
 from app.agents.final_judge import final_judge_agent
-from app.rag.vector_store import vector_rag
-from app.database.models import FactCheckDB, ClaimDB, SourceDB, EvidenceDB, AgentLogDB
+from app.database.models import FactCheckDB, ClaimDB, SourceDB, AgentLogDB
 
 logger = logging.getLogger("factguard.orchestrator")
 
-class FactGuardOrchestrator:
+class MultiAgentOrchestrator:
     """
-    Multi-Agent Stateful Graph Orchestrator for FactGuard AI.
-    Executes Agent 1 -> Agent 2 -> Agent 3 -> Agent 4 -> Agent 5 -> Agent 6 -> Agent 7 pipeline.
+    Coordinates the 7-agent fact-checking pipeline execution graph.
     """
 
     async def execute_fact_check(
@@ -33,150 +32,144 @@ class FactGuardOrchestrator:
         request: FactCheckRequest,
         db_session: Optional[AsyncSession] = None
     ) -> FactCheckResponse:
+        total_start = time.time()
         fact_check_id = str(uuid.uuid4())
-        start_pipeline_time = time.time()
         agent_logs: List[AgentLog] = []
 
-        logger.info(f"=== [FACTGUARD PRODUCTION EXECUTION LOG] ID: {fact_check_id} ===")
-        logger.info(f"Received Request Input: '{request.input_text}' (Type: {request.input_type})")
+        logger.info(f"Starting FactGuard Multi-Agent Pipeline for Fact-Check ID: {fact_check_id}")
 
-        # -------------------------------------------------------------
-        # STEP 1: Agent 1 - Claim Extraction Agent
-        # -------------------------------------------------------------
+        # Requirement 6 Logging
+        logger.info("===============================================")
+        logger.info(f"RECEIVED INPUT TEXT ({request.input_type}): {request.input_text}")
+        logger.info("===============================================")
+
+        # Agent 1: Claim Extraction Agent
         a1_start = time.time()
+        extracted_claims = await claim_extractor_agent.run(request.input_text)
+        a1_time = round((time.time() - a1_start) * 1000, 2)
         agent_logs.append(AgentLog(
-            agent_name="Claim Extraction Agent",
-            status="started",
-            message="Analyzing submitted input text and breaking into atomic verifiable claims...",
-            execution_time_ms=0.0,
+            id=str(uuid.uuid4()),
+            agent_name="Claim Extractor Agent",
+            status="completed",
+            message=f"Extracted {len(extracted_claims)} claim(s) from input text.",
+            execution_time_ms=a1_time,
             created_at=datetime.utcnow().isoformat()
         ))
-        
-        extracted_claims: List[ClaimExtractionItem] = await claim_extractor_agent.run(request.input_text)
-        a1_time = round((time.time() - a1_start) * 1000, 2)
-        
-        agent_logs[-1].status = "completed"
-        agent_logs[-1].message = f"Extracted {len(extracted_claims)} verifiable claim(s)."
-        agent_logs[-1].execution_time_ms = a1_time
 
-        for claim in extracted_claims:
-            logger.info(f"Extracted Claim [{claim.claim_id}]: '{claim.claim_text}'")
+        if not extracted_claims:
+            extracted_claims = [ClaimExtractionItem(
+                claim_id="C001",
+                claim_text=request.input_text,
+                is_verifiable=True,
+                category="General"
+            )]
 
-        # -------------------------------------------------------------
-        # STEP 2, 3, 4, 6: Parallel per-claim research & evaluation
-        # -------------------------------------------------------------
-        claim_sources: Dict[str, List[SourceMetadata]] = {}
-        claim_evidence: Dict[str, EvidenceAnalysisForClaim] = {}
-        claim_consistency: Dict[str, ConsistencyCheckResult] = {}
+        logger.info(f"EXTRACTED CLAIMS COUNT: {len(extracted_claims)}")
+        for idx, claim_item in enumerate(extracted_claims):
+            logger.info(f"   Claim [{idx+1}]: {claim_item.claim_text}")
+
+        claim_sources_dict: Dict[str, List[SourceMetadata]] = {}
+        claim_evidence_dict: Dict[str, EvidenceAnalysisForClaim] = {}
+        claim_consistency_dict: Dict[str, ConsistencyCheckResult] = {}
         all_flattened_sources: List[SourceMetadata] = []
 
+        # Process claims sequentially or concurrently
         for claim in extracted_claims:
-            cid = claim.claim_id
-            
-            # Agent 2: Web Research
+            # Agent 2: Research & Web Retrieval Agent
             a2_start = time.time()
             sources = await research_agent.run(claim)
             a2_time = round((time.time() - a2_start) * 1000, 2)
+            all_flattened_sources.extend(sources)
+            claim_sources_dict[claim.claim_id] = sources
+
             agent_logs.append(AgentLog(
-                agent_name=f"Research Agent ({cid})",
+                id=str(uuid.uuid4()),
+                agent_name="Research & Web Retrieval Agent",
                 status="completed",
-                message=f"Retrieved {len(sources)} web sources across multi-query strategies.",
+                message=f"Retrieved {len(sources)} unique source(s) for claim '{claim.claim_id}'.",
                 execution_time_ms=a2_time,
                 created_at=datetime.utcnow().isoformat()
             ))
 
-            # Agent 4: Source Credibility Evaluation
+            logger.info(f"RETRIEVED SOURCES FOR CLAIM {claim.claim_id}: {len(sources)} items.")
+            for src in sources[:3]:
+                logger.info(f"   Source [{src.publisher}]: {src.excerpt[:100]}...")
+
+            # Agent 4: Source Credibility Agent
             a4_start = time.time()
-            evaluated_sources = await source_credibility_agent.run(sources)
+            sources = await source_credibility_agent.run(sources)
             a4_time = round((time.time() - a4_start) * 1000, 2)
+            claim_sources_dict[claim.claim_id] = sources
             agent_logs.append(AgentLog(
-                agent_name=f"Source Credibility Agent ({cid})",
+                id=str(uuid.uuid4()),
+                agent_name="Source Credibility Agent",
                 status="completed",
-                message=f"Evaluated domain authority and credibility ratings for {len(evaluated_sources)} sources.",
+                message=f"Assessed credibility scores for {len(sources)} source(s).",
                 execution_time_ms=a4_time,
                 created_at=datetime.utcnow().isoformat()
             ))
 
-            claim_sources[cid] = evaluated_sources
-            all_flattened_sources.extend(evaluated_sources)
-
-            # Agent 3: Evidence Verification
+            # Agent 3: Evidence Verification Agent
             a3_start = time.time()
-            ev_analysis = await evidence_verifier_agent.run(claim, evaluated_sources)
+            evidence_analysis = await evidence_verifier_agent.run(claim, sources)
             a3_time = round((time.time() - a3_start) * 1000, 2)
+            claim_evidence_dict[claim.claim_id] = evidence_analysis
             agent_logs.append(AgentLog(
-                agent_name=f"Evidence Verification Agent ({cid})",
+                id=str(uuid.uuid4()),
+                agent_name="Evidence Verification Agent",
                 status="completed",
-                message=f"Categorized evidence into {len(ev_analysis.supporting_evidence)} supporting and {len(ev_analysis.contradicting_evidence)} contradicting items.",
+                message=f"Verified evidence for claim '{claim.claim_id}'. Supporting: {len(evidence_analysis.supporting_evidence)}, Contradicting: {len(evidence_analysis.contradicting_evidence)}.",
                 execution_time_ms=a3_time,
                 created_at=datetime.utcnow().isoformat()
             ))
 
-            claim_evidence[cid] = ev_analysis
+            logger.info(f"EVIDENCE CLASSIFICATION FOR CLAIM {claim.claim_id}:")
+            logger.info(f"   Supporting Evidence Count: {len(evidence_analysis.supporting_evidence)}")
+            logger.info(f"   Contradicting Evidence Count: {len(evidence_analysis.contradicting_evidence)}")
 
-            # Requirement 6 Logging
-            logger.info(f"Claim [{cid}] Retrieved {len(evaluated_sources)} sources.")
-            logger.info(f"  Supporting Evidence Count: {len(ev_analysis.supporting_evidence)}")
-            logger.info(f"  Contradicting Evidence Count: {len(ev_analysis.contradicting_evidence)}")
-            for sup in ev_analysis.supporting_evidence:
-                logger.info(f"    - SUPPORTING EXCERPT: {sup.evidence_text[:120]}...")
-            for con in ev_analysis.contradicting_evidence:
-                logger.info(f"    - CONTRADICTING EXCERPT: {con.evidence_text[:120]}...")
-
-            # Store evidence in RAG Vector Store
-            try:
-                evidence_items_dict = [
-                    item.model_dump() for item in ev_analysis.supporting_evidence + ev_analysis.contradicting_evidence + ev_analysis.contextual_evidence
-                ]
-                vector_rag.add_evidence_chunks(claim_id=cid, evidence_items=evidence_items_dict)
-            except Exception as e:
-                logger.warning(f"Failed to add evidence to RAG: {e}")
-
-            # Agent 6: Cross-Source Consistency Checker
+            # Agent 6: Cross-Source Consistency Agent
             a6_start = time.time()
-            consistency_res = await consistency_checker_agent.run(claim, evaluated_sources, ev_analysis)
+            consistency_res = await consistency_checker_agent.run(claim, sources, evidence_analysis)
             a6_time = round((time.time() - a6_start) * 1000, 2)
+            claim_consistency_dict[claim.claim_id] = consistency_res
             agent_logs.append(AgentLog(
-                agent_name=f"Cross-Source Consistency Agent ({cid})",
+                id=str(uuid.uuid4()),
+                agent_name="Cross-Source Consistency Agent",
                 status="completed",
-                message=consistency_res.findings,
+                message=f"Checked cross-source consistency for claim '{claim.claim_id}'. Score: {consistency_res.consistency_score}.",
                 execution_time_ms=a6_time,
                 created_at=datetime.utcnow().isoformat()
             ))
 
-            claim_consistency[cid] = consistency_res
-
-        # -------------------------------------------------------------
-        # STEP 5: Agent 5 - Bias & Manipulation Detection Agent
-        # -------------------------------------------------------------
+        # Agent 5: Bias & Manipulation Detection Agent
         a5_start = time.time()
-        bias_analysis: BiasAnalysisResult = await bias_detector_agent.run(request.input_text)
+        bias_analysis = await bias_detector_agent.run(request.input_text)
         a5_time = round((time.time() - a5_start) * 1000, 2)
         agent_logs.append(AgentLog(
-            agent_name="Bias & Manipulation Detection Agent",
+            id=str(uuid.uuid4()),
+            agent_name="Bias & Manipulation Agent",
             status="completed",
-            message=bias_analysis.summary,
+            message=f"Analyzed text for bias/manipulation. Bias Score: {bias_analysis.bias_score}.",
             execution_time_ms=a5_time,
             created_at=datetime.utcnow().isoformat()
         ))
 
-        # -------------------------------------------------------------
-        # STEP 7: Agent 7 - Final Judge Agent
-        # -------------------------------------------------------------
+        # Agent 7: Final Synthesis & Verdict Agent
         a7_start = time.time()
         final_judge_res = await final_judge_agent.run(
             original_input=request.input_text,
             claims=extracted_claims,
-            claim_sources=claim_sources,
-            claim_evidence=claim_evidence,
-            claim_consistency=claim_consistency,
+            claim_sources=claim_sources_dict,
+            claim_evidence=claim_evidence_dict,
+            claim_consistency=claim_consistency_dict,
             bias_analysis=bias_analysis
         )
         a7_time = round((time.time() - a7_start) * 1000, 2)
         agent_logs.append(AgentLog(
-            agent_name="Final Judge Agent",
+            id=str(uuid.uuid4()),
+            agent_name="Final Synthesis & Verdict Agent",
             status="completed",
-            message=f"Final Verdict issued: {final_judge_res['overall_verdict']} with {final_judge_res['confidence_score']}% confidence.",
+            message=f"Synthesized final verdict: {final_judge_res['overall_verdict'].value} with confidence {final_judge_res['confidence_score']}%.",
             execution_time_ms=a7_time,
             created_at=datetime.utcnow().isoformat()
         ))
@@ -194,8 +187,22 @@ class FactGuardOrchestrator:
                 seen_urls.add(s.url)
                 unique_sources.append(s)
 
+        sup_ev: List[EvidenceItem] = []
+        con_ev: List[EvidenceItem] = []
+        avg_cons = 85.0
+        
+        for cv in final_judge_res["claim_verdicts"]:
+            if cv.evidence_breakdown:
+                sup_ev.extend(cv.evidence_breakdown.supporting_evidence)
+                con_ev.extend(cv.evidence_breakdown.contradicting_evidence)
+            if cv.consistency:
+                avg_cons = cv.consistency.consistency_score
+
         response = FactCheckResponse(
             id=fact_check_id,
+            status="success",
+            verdict=final_judge_res["overall_verdict"].value,
+            confidence=final_judge_res["confidence_score"],
             original_input=request.input_text,
             input_type=request.input_type,
             overall_verdict=final_judge_res["overall_verdict"],
@@ -203,6 +210,10 @@ class FactGuardOrchestrator:
             summary=final_judge_res["summary"],
             key_context=final_judge_res.get("key_context"),
             limitations=final_judge_res.get("limitations"),
+            claims=extracted_claims,
+            supporting_evidence=sup_ev,
+            contradicting_evidence=con_ev,
+            cross_source_consistency=avg_cons,
             extracted_claims=extracted_claims,
             claim_verdicts=final_judge_res["claim_verdicts"],
             sources=unique_sources,
@@ -218,19 +229,61 @@ class FactGuardOrchestrator:
             except Exception as db_err:
                 logger.error(f"Failed to persist fact check to database: {db_err}")
 
+        total_time = round((time.time() - total_start) * 1000, 2)
+        logger.info(f"FactGuard Multi-Agent Pipeline completed in {total_time}ms.")
         return response
 
-    async def _persist_fact_check(self, res: FactCheckResponse, db: AsyncSession):
-        fc_db = FactCheckDB(
-            id=res.id,
-            original_input=res.original_input,
-            input_type=res.input_type.value if hasattr(res.input_type, 'value') else str(res.input_type),
-            overall_verdict=res.overall_verdict.value if hasattr(res.overall_verdict, 'value') else str(res.overall_verdict),
-            confidence_score=res.confidence_score,
-            summary=res.summary,
+    async def _persist_fact_check(self, response: FactCheckResponse, db: AsyncSession):
+        """Persist fact check run and child entities to database."""
+        fact_check_db = FactCheckDB(
+            id=response.id,
+            original_input=response.original_input,
+            input_type=response.input_type.value,
+            overall_verdict=response.overall_verdict.value,
+            confidence_score=response.confidence_score,
+            summary=response.summary,
+            key_context=response.key_context,
+            limitations=response.limitations,
+            has_bias=response.bias_analysis.has_bias if response.bias_analysis else False,
+            bias_score=response.bias_analysis.bias_score if response.bias_analysis else 0.0,
             created_at=datetime.utcnow()
         )
-        db.add(fc_db)
+        db.add(fact_check_db)
+
+        for claim in response.extracted_claims:
+            claim_db = ClaimDB(
+                id=f"{response.id}_{claim.claim_id}",
+                fact_check_id=response.id,
+                claim_id=claim.claim_id,
+                claim_text=claim.claim_text,
+                category=claim.category or "General"
+            )
+            db.add(claim_db)
+
+        for src in response.sources:
+            source_db = SourceDB(
+                id=f"{response.id}_{src.source_id}",
+                fact_check_id=response.id,
+                title=src.title,
+                url=src.url,
+                publisher=src.publisher,
+                excerpt=src.excerpt,
+                credibility_score=src.credibility_score,
+                credibility_rating=src.credibility_rating.value
+            )
+            db.add(source_db)
+
+        for log in response.agent_logs:
+            log_db = AgentLogDB(
+                id=log.id or str(uuid.uuid4()),
+                fact_check_id=response.id,
+                agent_name=log.agent_name,
+                status=log.status,
+                message=log.message,
+                execution_time_ms=log.execution_time_ms
+            )
+            db.add(log_db)
+
         await db.commit()
 
-orchestrator = FactGuardOrchestrator()
+orchestrator = MultiAgentOrchestrator()

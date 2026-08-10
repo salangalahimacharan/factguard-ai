@@ -1,6 +1,7 @@
 import time
 import logging
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -20,16 +21,33 @@ from app.services.demo_data import DEMO_CLAIMS_DATABASE
 logger = logging.getLogger("factguard.api.fact_check")
 router = APIRouter(prefix="/fact-check", tags=["Fact Check"])
 
+class URLFactCheckPayload(BaseModel):
+    url: Optional[str] = None
+
 @router.post("", response_model=FactCheckResponse)
 async def create_fact_check(
     request: FactCheckRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Execute full multi-agent fact check for raw text or post input.
+    Execute full multi-agent fact check for raw text, URL, or post input.
     """
     if not request.input_text or len(request.input_text.strip()) < 5:
-        raise HTTPException(status_code=400, detail="Input text must be at least 5 characters long.")
+        raise HTTPException(status_code=400, detail="Input text or URL must be at least 5 characters long.")
+
+    text_input = request.input_text.strip()
+    
+    # Auto-detect URL input in main endpoint
+    if request.input_type == InputType.URL or text_input.startswith("http://") or text_input.startswith("https://") or (text_input.startswith("www.") and len(text_input.split()) == 1):
+        try:
+            title, content = await url_scraper_service.fetch_url_content(text_input)
+            request = FactCheckRequest(input_text=content, input_type=InputType.URL)
+        except ValueError as ve:
+            logger.warning(f"Auto URL fetch failed: {ve}")
+            raise HTTPException(status_code=400, detail=str(ve))
+        except Exception as e:
+            logger.error(f"URL scraper error: {e}")
+            raise HTTPException(status_code=400, detail=f"Unable to retrieve article content from this URL.")
 
     try:
         response = await orchestrator.execute_fact_check(request, db_session=db)
@@ -40,22 +58,33 @@ async def create_fact_check(
 
 @router.post("/url", response_model=FactCheckResponse)
 async def create_fact_check_url(
-    url: str = Form(...),
+    url: Optional[str] = Form(None),
+    payload: Optional[URLFactCheckPayload] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Scrape target article/social media URL and execute multi-agent fact check.
+    Supports Form Data and JSON payloads.
     """
+    target_url = url or (payload.url if payload else None)
+    if not target_url or not target_url.strip():
+        raise HTTPException(status_code=400, detail="Target URL must be provided.")
+
+    target_url = target_url.strip()
+    if not target_url.startswith("http://") and not target_url.startswith("https://"):
+        target_url = "https://" + target_url
+
     try:
-        title, content = await url_scraper_service.fetch_url_content(url)
+        title, content = await url_scraper_service.fetch_url_content(target_url)
         request = FactCheckRequest(input_text=content, input_type=InputType.URL)
         response = await orchestrator.execute_fact_check(request, db_session=db)
         return response
     except ValueError as ve:
+        logger.error(f"URL scraper error for '{target_url}': {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        logger.error(f"URL fact check failed for '{url}': {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process target URL: {str(e)}")
+        logger.error(f"URL fact check failed for '{target_url}': {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Unable to retrieve article content from this URL: {str(e)}")
 
 @router.post("/image", response_model=FactCheckResponse)
 async def create_fact_check_image(
@@ -94,7 +123,6 @@ async def get_fact_check_history(
 
         history = []
         for r in records:
-            # Count claims
             c_stmt = select(func.count(ClaimDB.id)).where(ClaimDB.fact_check_id == r.id)
             c_res = await db.execute(c_stmt)
             c_count = c_res.scalar() or 1
@@ -135,7 +163,6 @@ async def get_fact_check_by_id(
     if not record:
         raise HTTPException(status_code=404, detail="Fact check report not found.")
 
-    # Reconstruct Pydantic model
     request = FactCheckRequest(input_text=record.original_input, input_type=InputType(record.input_type))
     response = await orchestrator.execute_fact_check(request, db_session=db)
     response.id = record.id
