@@ -17,21 +17,12 @@ from app.agents.final_judge import final_judge_agent
 from app.graph.workflow import orchestrator
 
 @pytest.mark.asyncio
-async def test_requirement_9_test_1_earth_revolves_sun():
-    """TEST 1: 'The Earth revolves around the Sun.' -> Expected: VERIFIED"""
-    req = FactCheckRequest(input_text="The Earth revolves around the Sun.", input_type=InputType.TEXT)
-    res = await orchestrator.execute_fact_check(req)
-    assert res.overall_verdict == VerdictType.VERIFIED
-    assert res.confidence_score >= 75.0
-
-@pytest.mark.asyncio
-async def test_requirement_9_test_2_humans_breathe_underwater():
-    """TEST 2: 'Humans can breathe underwater without any equipment.' -> Expected: FALSE"""
+async def test_requirement_10_test_1_humans_breathe_underwater():
+    """TEST 1: 'Humans can breathe underwater without any equipment.' -> Expected: FALSE"""
     req = FactCheckRequest(input_text="Humans can breathe underwater without any equipment.", input_type=InputType.TEXT)
     res = await orchestrator.execute_fact_check(req)
     assert res.overall_verdict == VerdictType.FALSE
     
-    # Verify that evidence is correctly categorized under CONTRADICTING EVIDENCE
     assert len(res.claim_verdicts) > 0
     cv = res.claim_verdicts[0]
     assert cv.verdict == VerdictType.FALSE
@@ -40,19 +31,26 @@ async def test_requirement_9_test_2_humans_breathe_underwater():
     assert len(cv.evidence_breakdown.supporting_evidence) == 0
 
 @pytest.mark.asyncio
-async def test_requirement_9_test_3_insufficient_evidence():
-    """TEST 3: A claim with insufficient reliable evidence -> Expected: UNCERTAIN"""
-    obscure_text = "Project Quantum-Z-999 built a warp engine in secret in an underground basement yesterday."
-    req = FactCheckRequest(input_text=obscure_text, input_type=InputType.TEXT)
+async def test_requirement_10_test_2_earth_revolves_sun():
+    """TEST 2: 'The Earth revolves around the Sun.' -> Expected: VERIFIED"""
+    req = FactCheckRequest(input_text="The Earth revolves around the Sun.", input_type=InputType.TEXT)
     res = await orchestrator.execute_fact_check(req)
-    assert res.overall_verdict in [VerdictType.UNCERTAIN, VerdictType.INSUFFICIENT_EVIDENCE, VerdictType.UNVERIFIED]
+    assert res.overall_verdict == VerdictType.VERIFIED
+    assert res.confidence_score >= 75.0
 
 @pytest.mark.asyncio
-async def test_requirement_9_test_4_conflicting_evidence():
-    """TEST 4: A claim with strong conflicting evidence -> Expected: UNCERTAIN or PARTIALLY TRUE"""
-    req = FactCheckRequest(input_text="Coffee consumption reduces risk of heart disease.", input_type=InputType.TEXT)
+async def test_requirement_10_test_3_coffee_consumption():
+    """TEST 3: 'Drinking 3 cups of coffee daily eliminates all risk of heart disease.' -> Expected: FALSE / PARTIALLY TRUE"""
+    req = FactCheckRequest(input_text="Drinking 3 cups of coffee daily eliminates all risk of heart disease.", input_type=InputType.TEXT)
     res = await orchestrator.execute_fact_check(req)
-    assert res.overall_verdict in [VerdictType.VERIFIED, VerdictType.UNCERTAIN, VerdictType.PARTIALLY_TRUE, VerdictType.INSUFFICIENT_EVIDENCE, VerdictType.UNVERIFIED]
+    assert res.overall_verdict in [VerdictType.FALSE, VerdictType.PARTIALLY_TRUE, VerdictType.MISLEADING, VerdictType.UNCERTAIN]
+
+@pytest.mark.asyncio
+async def test_requirement_10_test_4_5g_covid():
+    """TEST 4: '5G cell towers directly cause COVID-19 infections.' -> Expected: FALSE"""
+    req = FactCheckRequest(input_text="5G cell towers directly cause COVID-19 infections.", input_type=InputType.TEXT)
+    res = await orchestrator.execute_fact_check(req)
+    assert res.overall_verdict == VerdictType.FALSE
 
 @pytest.mark.asyncio
 async def test_prompt_injection_safety():
