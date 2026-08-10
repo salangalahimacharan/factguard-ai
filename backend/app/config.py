@@ -40,3 +40,8 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
+# Force Production Settings when deployed on Render or cloud host
+if os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID") or os.environ.get("PORT"):
+    settings.ENV = "production"
+    settings.DEMO_MODE = False
