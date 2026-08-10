@@ -1,0 +1,11 @@
+# Ignore Python backend files from Vercel static site builder
+backend/
+main.py
+requirements.txt
+runtime.txt
+start.sh
+render.yaml
+docs/
+tests/
+factguard.db
+chroma_db/
