@@ -5,7 +5,7 @@ import {
   EvaluationMetricsResponse 
 } from '../types';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://factguard-ai.onrender.com/api/v1';
 
 export async function verifyText(text: string): Promise<FactCheckResponse> {
   const response = await fetch(`${API_BASE_URL}/fact-check`, {
