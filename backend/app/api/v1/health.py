@@ -11,7 +11,9 @@ async def health_check():
         "status": "healthy",
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
+        "commit": "d3b10a0",
         "environment": settings.ENV,
         "llm_provider": settings.LLM_PROVIDER,
+        "demo_mode": settings.DEMO_MODE,
         "rag_status": "initialized" if vector_rag.initialized else "fallback"
     }

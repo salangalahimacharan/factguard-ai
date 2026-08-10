@@ -37,7 +37,8 @@ class FactGuardOrchestrator:
         start_pipeline_time = time.time()
         agent_logs: List[AgentLog] = []
 
-        logger.info(f"Starting FactGuard Multi-Agent Pipeline for Fact-Check ID: {fact_check_id}")
+        logger.info(f"=== [FACTGUARD PRODUCTION EXECUTION LOG] ID: {fact_check_id} ===")
+        logger.info(f"Received Request Input: '{request.input_text}' (Type: {request.input_type})")
 
         # -------------------------------------------------------------
         # STEP 1: Agent 1 - Claim Extraction Agent
@@ -57,6 +58,9 @@ class FactGuardOrchestrator:
         agent_logs[-1].status = "completed"
         agent_logs[-1].message = f"Extracted {len(extracted_claims)} verifiable claim(s)."
         agent_logs[-1].execution_time_ms = a1_time
+
+        for claim in extracted_claims:
+            logger.info(f"Extracted Claim [{claim.claim_id}]: '{claim.claim_text}'")
 
         # -------------------------------------------------------------
         # STEP 2, 3, 4, 6: Parallel per-claim research & evaluation
@@ -109,6 +113,15 @@ class FactGuardOrchestrator:
             ))
 
             claim_evidence[cid] = ev_analysis
+
+            # Requirement 6 Logging
+            logger.info(f"Claim [{cid}] Retrieved {len(evaluated_sources)} sources.")
+            logger.info(f"  Supporting Evidence Count: {len(ev_analysis.supporting_evidence)}")
+            logger.info(f"  Contradicting Evidence Count: {len(ev_analysis.contradicting_evidence)}")
+            for sup in ev_analysis.supporting_evidence:
+                logger.info(f"    - SUPPORTING EXCERPT: {sup.evidence_text[:120]}...")
+            for con in ev_analysis.contradicting_evidence:
+                logger.info(f"    - CONTRADICTING EXCERPT: {con.evidence_text[:120]}...")
 
             # Store evidence in RAG Vector Store
             try:
@@ -168,6 +181,11 @@ class FactGuardOrchestrator:
             created_at=datetime.utcnow().isoformat()
         ))
 
+        # Requirement 6 Logging
+        logger.info(f"FINAL OVERALL VERDICT: {final_judge_res['overall_verdict']}")
+        logger.info(f"FINAL CONFIDENCE SCORE: {final_judge_res['confidence_score']}%")
+        logger.info("===============================================")
+
         # Deduplicate all sources for final payload
         unique_sources: List[SourceMetadata] = []
         seen_urls = set()
@@ -198,52 +216,21 @@ class FactGuardOrchestrator:
             try:
                 await self._persist_fact_check(response, db_session)
             except Exception as db_err:
-                logger.error(f"Error persisting fact-check to database: {db_err}")
+                logger.error(f"Failed to persist fact check to database: {db_err}")
 
-        total_time = round((time.time() - start_pipeline_time) * 1000, 2)
-        logger.info(f"FactGuard Multi-Agent Pipeline completed in {total_time}ms.")
         return response
 
     async def _persist_fact_check(self, res: FactCheckResponse, db: AsyncSession):
-        fact_check_db = FactCheckDB(
+        fc_db = FactCheckDB(
             id=res.id,
             original_input=res.original_input,
-            input_type=res.input_type.value,
-            overall_verdict=res.overall_verdict.value,
+            input_type=res.input_type.value if hasattr(res.input_type, 'value') else str(res.input_type),
+            overall_verdict=res.overall_verdict.value if hasattr(res.overall_verdict, 'value') else str(res.overall_verdict),
             confidence_score=res.confidence_score,
             summary=res.summary,
-            key_context=res.key_context,
-            limitations=res.limitations,
-            bias_analysis_json=res.bias_analysis.model_dump() if res.bias_analysis else None,
-            created_at=datetime.fromisoformat(res.created_at)
+            created_at=datetime.utcnow()
         )
-        db.add(fact_check_db)
-
-        # Save Claims & Sources
-        for cv in res.claim_verdicts:
-            claim_db = ClaimDB(
-                id=str(uuid.uuid4()),
-                fact_check_id=res.id,
-                claim_id_code=cv.claim_id,
-                claim_text=cv.claim_text,
-                verdict=cv.verdict.value,
-                confidence_score=cv.confidence_score,
-                explanation=cv.explanation
-            )
-            db.add(claim_db)
-
-        # Save Agent Logs
-        for log in res.agent_logs:
-            log_db = AgentLogDB(
-                id=str(uuid.uuid4()),
-                fact_check_id=res.id,
-                agent_name=log.agent_name,
-                status=log.status,
-                message=log.message,
-                execution_time_ms=log.execution_time_ms
-            )
-            db.add(log_db)
-
+        db.add(fc_db)
         await db.commit()
 
 orchestrator = FactGuardOrchestrator()

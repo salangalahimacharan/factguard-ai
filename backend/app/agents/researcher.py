@@ -65,18 +65,19 @@ class ResearchAgent:
 
     def _generate_search_queries(self, claim: ClaimExtractionItem) -> Dict[str, str]:
         claim_text = claim.claim_text
-        entities_str = " ".join(claim.entities[:3]) if claim.entities else ""
-        date_str = " ".join(claim.dates[:1]) if claim.dates else ""
+        
+        # Clean search terms without quotes
+        clean_text = re.sub(r'[^\w\s]', ' ', claim_text)
+        words = [w for w in clean_text.split() if len(w) > 2]
+        keywords = " ".join(words[:8])
 
-        # Clean search terms without quotes or generic dictionary prefixes
-        clean_text = re.sub(r'[^\w\s]', '', claim_text)
-
-        return {
-            "entity_event": f"{entities_str} {clean_text[:60]}".strip(),
-            "claim_date": f"{clean_text[:50]} {date_str}".strip(),
-            "primary_source": f"NASA press release study {entities_str} {clean_text[:40]}".strip(),
-            "contradiction": f"{clean_text[:50]} debunk myth fake".strip(),
+        # Multi-query strategy for reliable evidence retrieval
+        queries = {
+            "direct_claim": f"{claim_text}".strip(),
+            "fact_check": f"{keywords} fact check debunk evidence".strip(),
+            "scientific_truth": f"{keywords} science research evidence".strip()
         }
+        return queries
 
     async def _execute_search(self, query: str, query_type: str) -> List[Dict[str, Any]]:
         results = []
@@ -98,121 +99,144 @@ class ResearchAgent:
             logger.debug(f"Wikipedia API exception for '{query}': {e}")
 
         # Engine 3: Google News RSS
-        if not results:
-            try:
-                gnews_results = await self._search_google_news_rss(query)
-                if gnews_results:
-                    results.extend(gnews_results)
-            except Exception as e:
-                logger.debug(f"Google News RSS exception for '{query}': {e}")
+        try:
+            news_results = await self._search_google_news_rss(query)
+            if news_results:
+                results.extend(news_results)
+        except Exception as e:
+            logger.debug(f"Google News RSS exception for '{query}': {e}")
 
-        return results[:3] # Limit per query variation
+        return results
 
     async def _search_duckduckgo_html(self, query: str) -> List[Dict[str, Any]]:
-        results = []
-        headers = {"User-Agent": USER_AGENT}
-        payload = {"q": query}
+        url = "https://html.duckduckgo.com/html/"
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        data = {"q": query}
 
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.post("https://html.duckduckgo.com/html/", data=payload, headers=headers)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                a_tags = soup.find_all("a", class_="result__a")
-                snippet_tags = soup.find_all("a", class_="result__snippet")
+            resp = await client.post(url, data=data, headers=headers)
+            if resp.status_code != 200:
+                return []
 
-                for a, snippet in zip(a_tags[:4], snippet_tags[:4]):
-                    raw_url = a.get("href", "")
-                    clean_url = self._decode_ddg_url(raw_url)
-                    
-                    if clean_url and not any(dict_domain in clean_url for dict_domain in ["dictionary.cambridge.org", "merriam-webster.com"]):
-                        results.append({
-                            "title": a.get_text().strip(),
-                            "url": clean_url,
-                            "snippet": snippet.get_text().strip(),
-                            "publisher": self._extract_domain(clean_url),
-                            "date": None
-                        })
-        return results
+            soup = BeautifulSoup(resp.text, "html.parser")
+            results = []
+
+            for result in soup.select(".result"):
+                title_elem = result.select_one(".result__title a")
+                snippet_elem = result.select_one(".result__snippet")
+                url_elem = result.select_one(".result__url")
+
+                if not title_elem:
+                    continue
+
+                raw_href = title_elem.get("href", "")
+                actual_url = self._clean_ddg_url(raw_href)
+
+                if actual_url and actual_url.startswith("http"):
+                    results.append({
+                        "title": title_elem.get_text(strip=True),
+                        "url": actual_url,
+                        "snippet": snippet_elem.get_text(strip=True) if snippet_elem else "",
+                        "publisher": self._extract_domain(actual_url)
+                    })
+
+                if len(results) >= 5:
+                    break
+
+            return results
 
     async def _search_wikipedia(self, query: str) -> List[Dict[str, Any]]:
-        results = []
-        headers = {"User-Agent": "FactGuardAI/1.0 (contact@factguard.org)"}
-        encoded = urllib.parse.quote_plus(query)
-        url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded}&format=json"
+        url = "https://en.wikipedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "format": "json",
+            "list": "search",
+            "srsearch": query,
+            "utf8": 1,
+            "srlimit": 3
+        }
+        headers = {"User-Agent": "FactGuardAI/1.0 (academic; project@factguard.ai)"}
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                hits = data.get("query", {}).get("search", [])
-                for hit in hits[:2]:
-                    title = hit.get("title", "")
-                    snippet = hit.get("snippet", "").replace('<span class="searchmatch">', '').replace('</span>', '')
-                    page_url = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
-                    results.append({
-                        "title": f"Wikipedia: {title}",
-                        "url": page_url,
-                        "snippet": snippet,
-                        "publisher": "wikipedia.org",
-                        "date": None
-                    })
-        return results
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+            if resp.status_code != 200:
+                return []
+
+            data = resp.json()
+            search_items = data.get("query", {}).get("search", [])
+            results = []
+
+            for item in search_items:
+                title = item.get("title", "")
+                snippet_raw = item.get("snippet", "")
+                clean_snippet = BeautifulSoup(snippet_raw, "html.parser").get_text(strip=True)
+
+                wiki_url = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
+                results.append({
+                    "title": f"Wikipedia: {title}",
+                    "url": wiki_url,
+                    "snippet": clean_snippet,
+                    "publisher": "Wikipedia Encyclopedia"
+                })
+            return results
 
     async def _search_google_news_rss(self, query: str) -> List[Dict[str, Any]]:
-        results = []
+        encoded_query = urllib.parse.quote(query)
+        rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
         headers = {"User-Agent": USER_AGENT}
-        encoded = urllib.parse.quote_plus(query)
-        url = f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "xml")
-                items = soup.find_all("item")
-                for item in items[:3]:
-                    link = item.link.text if item.link else ""
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(rss_url, headers=headers)
+            if resp.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(resp.text, "xml")
+            results = []
+
+            for item in soup.find_all("item")[:4]:
+                title = item.find("title").get_text(strip=True) if item.find("title") else ""
+                link = item.find("link").get_text(strip=True) if item.find("link") else ""
+                pub_date = item.find("pubDate").get_text(strip=True) if item.find("pubDate") else None
+
+                if link:
                     results.append({
-                        "title": item.title.text if item.title else "News Article",
+                        "title": title,
                         "url": link,
-                        "snippet": f"Google News: {item.title.text if item.title else ''}",
+                        "snippet": title,
                         "publisher": self._extract_domain(link),
-                        "date": item.pubDate.text if item.pubDate else None
+                        "date": pub_date
                     })
-        return results
+            return results
 
-    def _decode_ddg_url(self, raw_url: str) -> str:
-        try:
-            if "uddg=" in raw_url:
-                parsed = urllib.parse.urlparse(raw_url)
-                qs = urllib.parse.parse_qs(parsed.query)
-                if "uddg" in qs:
-                    return qs["uddg"][0]
-            if raw_url.startswith("//"):
-                return "https:" + raw_url
-            return raw_url
-        except Exception:
-            return raw_url
+    def _clean_ddg_url(self, raw_url: str) -> str:
+        if "uddg=" in raw_url:
+            match = re.search(r'uddg=([^&]+)', raw_url)
+            if match:
+                return urllib.parse.unquote(match.group(1))
+        return raw_url
 
     def _extract_domain(self, url: str) -> str:
         try:
             parsed = urllib.parse.urlparse(url)
-            domain = parsed.netloc.lower()
-            if domain.startswith("www."):
-                domain = domain[4:]
-            return domain or "web-source"
+            netloc = parsed.netloc or parsed.path.split('/')[0]
+            netloc = re.sub(r'^www\.', '', netloc)
+            return netloc
         except Exception:
-            return "web-source"
+            return "Web Source"
 
     def _determine_source_type(self, domain: str) -> str:
-        if domain.endswith(".gov") or "who.int" in domain or "cdc.gov" in domain or "nasa.gov" in domain:
+        domain_lower = domain.lower()
+        if any(gov in domain_lower for gov in [".gov", ".edu", "who.int", "nasa.gov", "cdc.gov", "nih.gov"]):
             return "official"
-        elif domain.endswith(".edu") or "arxiv.org" in domain or "nature.com" in domain or "sciencedirect.com" in domain:
-            return "academic"
-        elif any(news in domain for news in ["reuters.com", "apnews.com", "bbc.com", "nytimes.com", "bloomberg.com", "theguardian.com"]):
+        elif any(news in domain_lower for news in ["reuters", "apnews", "bbc", "nytimes", "bloomberg", "theguardian"]):
             return "news"
-        elif "wikipedia.org" in domain:
-            return "encyclopedia"
+        elif "wikipedia" in domain_lower:
+            return "academic"
         else:
-            return "web"
+            return "news"
 
 research_agent = ResearchAgent()
