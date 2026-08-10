@@ -15,5 +15,5 @@ async def health_check():
         "environment": settings.ENV,
         "llm_provider": settings.LLM_PROVIDER,
         "demo_mode": settings.DEMO_MODE,
-        "rag_status": "initialized" if vector_rag.initialized else "fallback"
+        "rag_status": "active" if (vector_rag.initialized or hasattr(vector_rag, 'fallback_storage')) else "inactive"
     }

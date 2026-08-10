@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
     
-    ENV: str = "development"
+    ENV: str = "production"
     PORT: int = 8000
     HOST: str = "0.0.0.0"
     
@@ -27,10 +27,11 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
+        "https://*.vercel.app",
         "*"
     ]
     
-    DEMO_MODE: bool = True
+    DEMO_MODE: bool = False
     
     model_config = SettingsConfigDict(
         env_file=".env",
