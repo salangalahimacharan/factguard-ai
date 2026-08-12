@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import urllib.parse
 import re
@@ -83,7 +84,7 @@ class URLAuthenticityService:
         try:
             timeout_cfg = httpx.Timeout(4.0, connect=3.0, read=4.0)
             async with httpx.AsyncClient(timeout=timeout_cfg, follow_redirects=True, verify=False) as client:
-                resp = await client.get(url, headers=headers)
+                resp = await asyncio.wait_for(client.get(url, headers=headers), timeout=4.0)
                 http_status_code = resp.status_code
                 if resp.status_code < 400 or resp.status_code in [401, 403]:
                     # 2xx, 3xx or 401/403 (exists but requires auth) means domain is active/reachable

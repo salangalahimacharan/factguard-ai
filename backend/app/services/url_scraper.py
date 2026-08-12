@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import urllib.parse
 import re
@@ -36,7 +37,7 @@ class URLScraperService:
         try:
             timeout_cfg = httpx.Timeout(4.0, connect=3.0, read=4.0)
             async with httpx.AsyncClient(timeout=timeout_cfg, follow_redirects=True, verify=False) as client:
-                resp = await client.get(url, headers=headers)
+                resp = await asyncio.wait_for(client.get(url, headers=headers), timeout=4.0)
                 resp.raise_for_status()
                 
                 html_content = resp.text
