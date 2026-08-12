@@ -79,9 +79,9 @@ class URLAuthenticityService:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         }
 
-        # Check reachability via HTTP/HTTPS GET with 15s timeout
+        # Check reachability via HTTP/HTTPS GET with 4.0s timeout for ultra-fast verification
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(timeout=4.0, follow_redirects=True, verify=False) as client:
                 resp = await client.get(url, headers=headers)
                 http_status_code = resp.status_code
                 if resp.status_code < 400 or resp.status_code in [401, 403]:

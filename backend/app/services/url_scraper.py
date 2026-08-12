@@ -34,7 +34,7 @@ class URLScraperService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(timeout=4.0, follow_redirects=True, verify=False) as client:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 
