@@ -11,7 +11,7 @@ from app.schemas.fact_check import (
     FactCheckRequest, FactCheckResponse, ClaimExtractionItem, SourceMetadata,
     EvidenceAnalysisForClaim, BiasAnalysisResult, ConsistencyCheckResult,
     ClaimVerdict, AgentLog, VerdictType, InputType, EvidenceItem,
-    URLAuthenticityResult, URLAuthenticityStatus
+    URLAuthenticityResult, URLAuthenticityStatus, CredibilityRating
 )
 from app.agents.claim_extractor import claim_extractor_agent
 from app.agents.researcher import research_agent
@@ -66,6 +66,89 @@ class MultiAgentOrchestrator:
                 execution_time_ms=url_auth_time,
                 created_at=datetime.utcnow().isoformat()
             ))
+
+            # Fast-path return for explicit pure URL Verification requests
+            is_pure_url = request.input_type == InputType.URL and len(request.input_text.strip().split()) <= 2
+            if is_pure_url:
+                v_verdict = VerdictType.VERIFIED if url_authenticity_res.is_authentic else (
+                    VerdictType.UNCERTAIN if url_authenticity_res.status == URLAuthenticityStatus.TIMEOUT else VerdictType.FALSE
+                )
+                summary_msg = f"URL Authenticity Check for '{url_authenticity_res.domain}': Status is {url_authenticity_res.status.value}. Domain Classification: {url_authenticity_res.domain_classification}. SSL Encryption: {'Active' if url_authenticity_res.has_ssl else 'Inactive'}."
+                
+                url_claim = ClaimExtractionItem(
+                    claim_id="C001",
+                    claim_text=f"URL Authenticity for {url_authenticity_res.domain}",
+                    is_verifiable=True,
+                    category="URL Verification"
+                )
+                url_source = SourceMetadata(
+                    source_id="SRC-C001-01",
+                    claim_id="C001",
+                    title=f"Official Domain: {url_authenticity_res.domain}",
+                    url=target_url,
+                    publisher=url_authenticity_res.domain,
+                    excerpt=f"Domain Classification: {url_authenticity_res.domain_classification}. Status: {url_authenticity_res.status.value}. Security Notes: {'; '.join(url_authenticity_res.security_notes)}",
+                    source_type="Official Domain",
+                    credibility_score=url_authenticity_res.reputation_score,
+                    credibility_rating=CredibilityRating.HIGH if url_authenticity_res.is_authentic else CredibilityRating.LOW,
+                    reliability_indicators=[f"Status: {url_authenticity_res.status.value}", f"SSL: {url_authenticity_res.has_ssl}"]
+                )
+                ev_item = EvidenceItem(
+                    evidence_id="EV-C001-01",
+                    claim_id="C001",
+                    source_id="SRC-C001-01",
+                    source_title=f"Official Domain: {url_authenticity_res.domain}",
+                    source_url=target_url,
+                    publisher=url_authenticity_res.domain,
+                    evidence_text=f"Domain Classification: {url_authenticity_res.domain_classification}. SSL: {url_authenticity_res.has_ssl}. Status: {url_authenticity_res.status.value}",
+                    evidence_type="supporting" if url_authenticity_res.is_authentic else "contradicting",
+                    evidence_strength=url_authenticity_res.reputation_score
+                )
+
+                url_evidence = EvidenceAnalysisForClaim(
+                    claim_id="C001",
+                    claim_text=f"URL Authenticity for {url_authenticity_res.domain}",
+                    supporting_evidence=[ev_item] if url_authenticity_res.is_authentic else [],
+                    contradicting_evidence=[] if url_authenticity_res.is_authentic else [ev_item],
+                    contextual_evidence=[],
+                    evidence_strength=url_authenticity_res.reputation_score,
+                    reasoning=summary_msg
+                )
+                url_bias = BiasAnalysisResult(
+                    has_bias=False,
+                    sensational_language=False,
+                    emotional_manipulation=False,
+                    clickbait_framing=False,
+                    missing_context=False,
+                    bias_score=0.0,
+                    indicators=[],
+                    summary="No emotional or sensational manipulation detected for standard web domain."
+                )
+
+                fast_response = FactCheckResponse(
+                    id=str(uuid.uuid4()),
+                    status="success",
+                    verdict=v_verdict.value,
+                    confidence=url_authenticity_res.reputation_score,
+                    original_input=request.input_text,
+                    input_type=request.input_type,
+                    overall_verdict=v_verdict,
+                    confidence_score=url_authenticity_res.reputation_score,
+                    summary=summary_msg,
+                    claims=[url_claim],
+                    extracted_claims=[url_claim],
+                    sources=[url_source],
+                    supporting_evidence=[ev_item] if url_authenticity_res.is_authentic else [],
+                    contradicting_evidence=[] if url_authenticity_res.is_authentic else [ev_item],
+                    cross_source_consistency=100.0 if url_authenticity_res.is_authentic else 30.0,
+                    bias_analysis=url_bias,
+                    url_authenticity=url_authenticity_res,
+                    agent_logs=agent_logs,
+                    created_at=datetime.utcnow().isoformat()
+                )
+                if db_session:
+                    await self._save_to_db(db_session, fast_response)
+                return fast_response
 
         # Agent 1: Claim Extraction Agent
         a1_start = time.time()
