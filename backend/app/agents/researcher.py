@@ -107,7 +107,7 @@ class ResearchAgent:
         try:
             timeout_cfg = httpx.Timeout(3.5, connect=2.5, read=3.5)
             async with httpx.AsyncClient(timeout=timeout_cfg, follow_redirects=True) as client:
-                resp = await client.post(url, data=data, headers=headers)
+                resp = await asyncio.wait_for(client.post(url, data=data, headers=headers), timeout=3.5)
                 if resp.status_code != 200:
                     return []
 
@@ -153,8 +153,9 @@ class ResearchAgent:
         headers = {"User-Agent": "FactGuardAI/1.0 (academic; project@factguard.ai)"}
 
         try:
-            async with httpx.AsyncClient(timeout=3.5) as client:
-                resp = await client.get(url, params=params, headers=headers)
+            timeout_cfg = httpx.Timeout(3.5, connect=2.5, read=3.5)
+            async with httpx.AsyncClient(timeout=timeout_cfg) as client:
+                resp = await asyncio.wait_for(client.get(url, params=params, headers=headers), timeout=3.5)
                 if resp.status_code != 200:
                     return []
 
@@ -185,8 +186,9 @@ class ResearchAgent:
         headers = {"User-Agent": USER_AGENT}
 
         try:
-            async with httpx.AsyncClient(timeout=3.5) as client:
-                resp = await client.get(rss_url, headers=headers)
+            timeout_cfg = httpx.Timeout(3.5, connect=2.5, read=3.5)
+            async with httpx.AsyncClient(timeout=timeout_cfg) as client:
+                resp = await asyncio.wait_for(client.get(rss_url, headers=headers), timeout=3.5)
                 if resp.status_code != 200:
                     return []
 

@@ -57,18 +57,31 @@ async def create_fact_check(
 
 @router.post("/url", response_model=FactCheckResponse)
 async def create_fact_check_url(
-    payload: URLFactCheckPayload,
+    req: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Scrape target article/social media URL and execute multi-agent fact check.
-    Receives JSON payload: { "url": "https://..." } or { "input_text": "https://..." }
+    Accepts JSON body: { "url": "https://..." } or { "input_text": "https://..." } as well as Form data.
     """
-    target_url = payload.url or payload.input_text
-    if not target_url or not target_url.strip():
+    target_url = None
+    try:
+        data = await req.json()
+        target_url = data.get("url") or data.get("input_text")
+    except Exception:
+        pass
+
+    if not target_url:
+        try:
+            form = await req.form()
+            target_url = form.get("url") or form.get("input_text")
+        except Exception:
+            pass
+
+    if not target_url or not str(target_url).strip():
         raise HTTPException(status_code=400, detail="Target URL must be provided.")
 
-    target_url = target_url.strip()
+    target_url = str(target_url).strip()
     if not target_url.startswith("http://") and not target_url.startswith("https://"):
         target_url = "https://" + target_url
 
@@ -89,14 +102,13 @@ async def create_fact_check_url(
 
 @router.post("/url/form", response_model=FactCheckResponse)
 async def create_fact_check_url_form(
-    url: str = Form(...),
+    req: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Form-data endpoint for URL verification.
     """
-    payload = URLFactCheckPayload(url=url)
-    return await create_fact_check_url(payload=payload, db=db)
+    return await create_fact_check_url(req=req, db=db)
 
 @router.post("/image", response_model=FactCheckResponse)
 async def create_fact_check_image(
