@@ -84,8 +84,7 @@ class ResearchAgent:
         # Multi-query strategy for reliable evidence retrieval
         queries = {
             "direct_claim": f"{keywords}".strip(),
-            "fact_check": f"{keywords} fact check debunk evidence".strip(),
-            "scientific_truth": f"{keywords} science research evidence".strip()
+            "fact_check": f"{keywords} fact check evidence".strip()
         }
         return queries
 
