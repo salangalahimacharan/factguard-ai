@@ -36,18 +36,40 @@ export async function verifyText(text: string): Promise<FactCheckResponse> {
 
 export async function verifyUrl(url: string): Promise<FactCheckResponse> {
   const cleanUrl = url.trim();
-  const formData = new FormData();
-  formData.append('url', cleanUrl);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 120000);
 
   try {
-    const response = await fetch(`${API_BASE_URL}/fact-check/url`, {
+    // Strategy 1: Send JSON payload to /fact-check/url
+    let response = await fetch(`${API_BASE_URL}/fact-check/url`, {
       method: 'POST',
-      body: formData,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: cleanUrl }),
       signal: controller.signal
     });
+
+    // Strategy 2: If JSON fails, try FormData to /fact-check/url
+    if (!response.ok) {
+      const formData = new FormData();
+      formData.append('url', cleanUrl);
+      response = await fetch(`${API_BASE_URL}/fact-check/url`, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal
+      });
+    }
+
+    // Strategy 3: If /fact-check/url fails, try main /fact-check endpoint with input_type = 'url'
+    if (!response.ok) {
+      response = await fetch(`${API_BASE_URL}/fact-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input_text: cleanUrl, input_type: 'url' }),
+        signal: controller.signal
+      });
+    }
+
     clearTimeout(timeoutId);
 
     if (!response.ok) {

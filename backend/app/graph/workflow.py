@@ -88,10 +88,11 @@ class MultiAgentOrchestrator:
                 category="General"
             )]
 
-        # Cap extracted claims to top 3 to guarantee ultra-fast analysis
-        if len(extracted_claims) > 3:
-            logger.info(f"Capping extracted claims from {len(extracted_claims)} to top 3 for speed optimization.")
-            extracted_claims = extracted_claims[:3]
+        # Cap extracted claims for speed optimization to prevent timeout on live deployment
+        max_claims = 1 if request.input_type == InputType.URL else 2
+        if len(extracted_claims) > max_claims:
+            logger.info(f"Capping extracted claims from {len(extracted_claims)} to top {max_claims} for speed optimization.")
+            extracted_claims = extracted_claims[:max_claims]
 
         logger.info(f"EXTRACTED CLAIMS COUNT: {len(extracted_claims)}")
         for idx, claim_item in enumerate(extracted_claims):
