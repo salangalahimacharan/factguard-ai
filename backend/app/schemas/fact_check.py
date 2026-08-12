@@ -121,6 +121,7 @@ class URLAuthenticityStatus(str, Enum):
     AUTHENTIC = "VERIFIED / AUTHENTIC"
     SUSPICIOUS = "SUSPICIOUS"
     UNREACHABLE = "UNREACHABLE / INVALID"
+    TIMEOUT = "TIMEOUT"
 
 class URLAuthenticityResult(BaseModel):
     url: str

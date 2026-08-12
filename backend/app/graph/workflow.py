@@ -234,20 +234,33 @@ class MultiAgentOrchestrator:
                 avg_cons = cv.consistency.consistency_score
 
         if request.input_type == InputType.URL and url_authenticity_res:
-            if url_authenticity_res.is_authentic:
+            if url_authenticity_res.status == URLAuthenticityStatus.TIMEOUT:
+                final_overall_v = VerdictType.VERIFIED if url_authenticity_res.is_authentic else VerdictType.UNCERTAIN
+                final_conf_score = url_authenticity_res.reputation_score
+                final_summary = (
+                    f"URL Status: TIMEOUT. Target website '{url_authenticity_res.domain}' did not respond within 15 seconds. "
+                    f"Domain classification: {url_authenticity_res.domain_classification} ({url_authenticity_res.reputation_score}% domain trust score)."
+                )
+            elif url_authenticity_res.is_authentic:
                 final_overall_v = VerdictType.VERIFIED
+                final_conf_score = url_authenticity_res.reputation_score
+                final_summary = (
+                    f"URL Status: {url_authenticity_res.status.value}. "
+                    f"Domain '{url_authenticity_res.domain}' classified as {url_authenticity_res.domain_classification} "
+                    f"with {url_authenticity_res.reputation_score}% domain trust score. "
+                    f"Page content claims evaluated separately below."
+                )
             elif not url_authenticity_res.is_reachable:
                 final_overall_v = VerdictType.UNVERIFIED
+                final_conf_score = 0.0
+                final_summary = (
+                    f"URL Status: {url_authenticity_res.status.value}. "
+                    f"Target domain '{url_authenticity_res.domain}' could not be reached or resolved."
+                )
             else:
                 final_overall_v = VerdictType.FALSE
-
-            final_conf_score = url_authenticity_res.reputation_score
-            final_summary = (
-                f"URL Status: {url_authenticity_res.status.value}. "
-                f"Domain '{url_authenticity_res.domain}' classified as {url_authenticity_res.domain_classification} "
-                f"with {url_authenticity_res.reputation_score}% domain trust score. "
-                f"Page content claims evaluated separately below."
-            )
+                final_conf_score = url_authenticity_res.reputation_score
+                final_summary = f"URL Status: {url_authenticity_res.status.value}."
         else:
             final_overall_v = final_judge_res["overall_verdict"]
             final_conf_score = final_judge_res["confidence_score"]

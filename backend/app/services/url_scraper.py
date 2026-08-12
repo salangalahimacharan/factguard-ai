@@ -34,7 +34,7 @@ class URLScraperService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 
@@ -64,6 +64,12 @@ class URLScraperService:
 
                 full_text = f"Article Headline: {title}\n\nURL: {url}\n\nContent:\n{clean_body}"
                 return title, full_text
+        except (httpx.TimeoutException, TimeoutError) as te:
+            logger.warning(f"URL scraper timed out fetching '{url}': {te}")
+            parsed = urllib.parse.urlparse(url)
+            fallback_title = f"Webpage from {parsed.netloc}"
+            fallback_text = f"URL: {url}\n\nTarget webpage content retrieval timed out after 15 seconds. Domain authenticity evaluated separately."
+            return fallback_title, fallback_text
         except httpx.HTTPStatusError as hse:
             logger.warning(f"HTTP status error fetching URL '{url}': {hse}")
             # Generate readable fallback text from URL for analysis if site blocks scrapers
@@ -73,8 +79,11 @@ class URLScraperService:
             fallback_text = f"Headline: {path_words}\n\nURL: {url}\n\nWeb page content from {parsed.netloc} discussing {path_words}."
             return fallback_title, fallback_text
         except Exception as e:
-            logger.error(f"Failed to fetch content from URL '{url}': {e}")
-            raise ValueError(f"Unable to retrieve article content from this URL. Please verify the URL is publicly accessible.")
+            logger.error(f"Failed to scrape URL '{url}': {e}")
+            parsed = urllib.parse.urlparse(url)
+            fallback_title = f"Webpage from {parsed.netloc}"
+            fallback_text = f"URL: {url}\n\nTarget webpage content from {parsed.netloc}."
+            return fallback_title, fallback_text
 
     def _is_safe_url(self, url: str) -> bool:
         try:

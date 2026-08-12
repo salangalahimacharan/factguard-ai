@@ -70,6 +70,7 @@ class URLAuthenticityService:
 
         has_ssl = parsed.scheme == "https"
         is_reachable = False
+        is_timeout = False
         http_status_code = None
         security_notes = []
 
@@ -78,9 +79,9 @@ class URLAuthenticityService:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         }
 
-        # Check reachability via HTTP/HTTPS GET with 8s timeout
+        # Check reachability via HTTP/HTTPS GET with 15s timeout
         try:
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
                 resp = await client.get(url, headers=headers)
                 http_status_code = resp.status_code
                 if resp.status_code < 400 or resp.status_code in [401, 403]:
@@ -89,6 +90,10 @@ class URLAuthenticityService:
                     security_notes.append(f"HTTP Server reachable (Status code: {resp.status_code}).")
                 else:
                     security_notes.append(f"HTTP Server returned status code {resp.status_code}.")
+        except (httpx.TimeoutException, TimeoutError):
+            is_timeout = True
+            is_reachable = False
+            security_notes.append("Target website request timed out after 15 seconds. Domain registration and SSL record remain active.")
         except httpx.HTTPStatusError as hse:
             is_reachable = True
             security_notes.append(f"Server responded with status {hse.response.status_code}.")
@@ -126,8 +131,13 @@ class URLAuthenticityService:
         if is_reachable:
             status = URLAuthenticityStatus.AUTHENTIC
             is_authentic = True
+        elif is_timeout:
+            status = URLAuthenticityStatus.TIMEOUT
+            if reputation_score >= 90.0:
+                is_authentic = True
+            else:
+                is_authentic = False
         else:
-            # If domain is a known official domain like nasa.gov or who.int but local network fails GET, keep authentic
             if reputation_score >= 90.0:
                 status = URLAuthenticityStatus.AUTHENTIC
                 is_authentic = True
