@@ -65,12 +65,10 @@ async def test_url_authenticity_decoupled_from_false_claim():
 @pytest.mark.asyncio
 async def test_url_authenticity_timeout_handling(monkeypatch):
     """TEST 5: Request timeout must return TIMEOUT status and not crash or return FALSE."""
-    import httpx
-    
-    async def mock_get(*args, **kwargs):
-        raise httpx.TimeoutException("Simulated 15s request timeout")
+    async def mock_wait_for(*args, **kwargs):
+        raise TimeoutError("Simulated socket timeout")
 
-    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    monkeypatch.setattr(asyncio, "wait_for", mock_wait_for)
     res = await url_authenticity_service.evaluate_url("https://slow-responding-domain.org")
     assert res.status == URLAuthenticityStatus.TIMEOUT
     assert res.status != URLAuthenticityStatus.UNREACHABLE
