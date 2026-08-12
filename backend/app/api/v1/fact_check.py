@@ -23,6 +23,7 @@ router = APIRouter(prefix="/fact-check", tags=["Fact Check"])
 
 class URLFactCheckPayload(BaseModel):
     url: Optional[str] = None
+    input_text: Optional[str] = None
 
 @router.post("", response_model=FactCheckResponse)
 async def create_fact_check(
@@ -33,7 +34,7 @@ async def create_fact_check(
     Execute full multi-agent fact check for raw text, URL, or post input.
     """
     if not request.input_text or len(request.input_text.strip()) < 5:
-        raise HTTPException(status_code=400, detail="Input text or URL must be at least 5 characters long.")
+        raise HTTPException(status_code=400, detail="Input text must be at least 5 characters long.")
 
     text_input = request.input_text.strip()
     
@@ -61,9 +62,9 @@ async def create_fact_check_url(
 ):
     """
     Scrape target article/social media URL and execute multi-agent fact check.
-    Receives JSON payload: { "url": "https://..." }
+    Receives JSON payload: { "url": "https://..." } or { "input_text": "https://..." }
     """
-    target_url = payload.url
+    target_url = payload.url or payload.input_text
     if not target_url or not target_url.strip():
         raise HTTPException(status_code=400, detail="Target URL must be provided.")
 
