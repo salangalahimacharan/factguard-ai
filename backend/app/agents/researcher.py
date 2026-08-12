@@ -105,7 +105,8 @@ class ResearchAgent:
         data = {"q": query}
 
         try:
-            async with httpx.AsyncClient(timeout=3.5, follow_redirects=True) as client:
+            timeout_cfg = httpx.Timeout(3.5, connect=2.5, read=3.5)
+            async with httpx.AsyncClient(timeout=timeout_cfg, follow_redirects=True) as client:
                 resp = await client.post(url, data=data, headers=headers)
                 if resp.status_code != 200:
                     return []
