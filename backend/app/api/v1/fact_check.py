@@ -39,15 +39,13 @@ async def create_fact_check(
     
     # Auto-detect URL input in main endpoint
     if request.input_type == InputType.URL or text_input.startswith("http://") or text_input.startswith("https://") or (text_input.startswith("www.") and len(text_input.split()) == 1):
+        target_u = text_input
         try:
-            title, content = await url_scraper_service.fetch_url_content(text_input)
-            request = FactCheckRequest(input_text=content, input_type=InputType.URL)
-        except ValueError as ve:
-            logger.warning(f"Auto URL fetch failed: {ve}")
-            raise HTTPException(status_code=400, detail=str(ve))
+            title, content = await url_scraper_service.fetch_url_content(target_u)
+            request = FactCheckRequest(input_text=f"URL: {target_u}\n\n{content}", input_type=InputType.URL)
         except Exception as e:
-            logger.error(f"URL scraper error: {e}")
-            raise HTTPException(status_code=400, detail=f"Unable to retrieve article content from this URL.")
+            logger.warning(f"Auto URL fetch fallback: {e}")
+            request = FactCheckRequest(input_text=f"URL: {target_u}\n\nContent unreachable.", input_type=InputType.URL)
 
     try:
         response = await orchestrator.execute_fact_check(request, db_session=db)
@@ -76,15 +74,18 @@ async def create_fact_check_url(
 
     try:
         title, content = await url_scraper_service.fetch_url_content(target_url)
-        request = FactCheckRequest(input_text=content, input_type=InputType.URL)
+        full_text = f"URL: {target_url}\n\n{content}"
+    except Exception as ve:
+        logger.warning(f"URL scraper fallback for '{target_url}': {ve}")
+        full_text = f"URL: {target_url}\n\nTarget page content could not be reached or extracted."
+
+    try:
+        request = FactCheckRequest(input_text=full_text, input_type=InputType.URL)
         response = await orchestrator.execute_fact_check(request, db_session=db)
         return response
-    except ValueError as ve:
-        logger.error(f"URL scraper error for '{target_url}': {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         logger.error(f"URL fact check failed for '{target_url}': {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail=f"Unable to retrieve article content from this URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Multi-agent workflow error: {str(e)}")
 
 @router.post("/image", response_model=FactCheckResponse)
 async def create_fact_check_image(

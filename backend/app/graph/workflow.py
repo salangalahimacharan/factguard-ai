@@ -2,6 +2,7 @@ import asyncio
 import time
 import logging
 import uuid
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -9,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.fact_check import (
     FactCheckRequest, FactCheckResponse, ClaimExtractionItem, SourceMetadata,
     EvidenceAnalysisForClaim, BiasAnalysisResult, ConsistencyCheckResult,
-    ClaimVerdict, AgentLog, VerdictType, InputType, EvidenceItem
+    ClaimVerdict, AgentLog, VerdictType, InputType, EvidenceItem,
+    URLAuthenticityResult, URLAuthenticityStatus
 )
 from app.agents.claim_extractor import claim_extractor_agent
 from app.agents.researcher import research_agent
@@ -18,13 +20,15 @@ from app.agents.source_credibility import source_credibility_agent
 from app.agents.bias_detector import bias_detector_agent
 from app.agents.consistency_checker import consistency_checker_agent
 from app.agents.final_judge import final_judge_agent
+from app.services.url_authenticity import url_authenticity_service
 from app.database.models import FactCheckDB, ClaimDB, SourceDB, AgentLogDB
 
 logger = logging.getLogger("factguard.orchestrator")
 
 class MultiAgentOrchestrator:
     """
-    Coordinates the 7-agent fact-checking pipeline execution graph.
+    Coordinates the multi-agent fact-checking pipeline execution graph.
+    Separates URL Authenticity Verification from Page Content Claim Fact-Checking.
     """
 
     async def execute_fact_check(
@@ -42,6 +46,26 @@ class MultiAgentOrchestrator:
         logger.info("===============================================")
         logger.info(f"RECEIVED INPUT TEXT ({request.input_type}): {request.input_text}")
         logger.info("===============================================")
+
+        url_authenticity_res: Optional[URLAuthenticityResult] = None
+
+        # Check for URL input and evaluate URL Authenticity independently
+        if request.input_type == InputType.URL or request.input_text.startswith("http://") or request.input_text.startswith("https://") or "URL: http" in request.input_text:
+            url_match = re.search(r'https?://[^\s]+', request.input_text)
+            target_url = url_match.group(0) if url_match else request.input_text.strip()
+            
+            url_auth_start = time.time()
+            url_authenticity_res = await url_authenticity_service.evaluate_url(target_url)
+            url_auth_time = round((time.time() - url_auth_start) * 1000, 2)
+
+            agent_logs.append(AgentLog(
+                id=str(uuid.uuid4()),
+                agent_name="URL Authenticity Evaluator Agent",
+                status="completed" if url_authenticity_res.is_authentic else "warning",
+                message=f"Evaluated URL authenticity for '{url_authenticity_res.domain}'. Status: {url_authenticity_res.status.value}, Classification: {url_authenticity_res.domain_classification}.",
+                execution_time_ms=url_auth_time,
+                created_at=datetime.utcnow().isoformat()
+            ))
 
         # Agent 1: Claim Extraction Agent
         a1_start = time.time()
@@ -209,18 +233,39 @@ class MultiAgentOrchestrator:
             if cv.consistency:
                 avg_cons = cv.consistency.consistency_score
 
+        if request.input_type == InputType.URL and url_authenticity_res:
+            if url_authenticity_res.is_authentic:
+                final_overall_v = VerdictType.VERIFIED
+            elif not url_authenticity_res.is_reachable:
+                final_overall_v = VerdictType.UNVERIFIED
+            else:
+                final_overall_v = VerdictType.FALSE
+
+            final_conf_score = url_authenticity_res.reputation_score
+            final_summary = (
+                f"URL Status: {url_authenticity_res.status.value}. "
+                f"Domain '{url_authenticity_res.domain}' classified as {url_authenticity_res.domain_classification} "
+                f"with {url_authenticity_res.reputation_score}% domain trust score. "
+                f"Page content claims evaluated separately below."
+            )
+        else:
+            final_overall_v = final_judge_res["overall_verdict"]
+            final_conf_score = final_judge_res["confidence_score"]
+            final_summary = final_judge_res["summary"]
+
         response = FactCheckResponse(
             id=fact_check_id,
             status="success",
-            verdict=final_judge_res["overall_verdict"].value,
-            confidence=final_judge_res["confidence_score"],
+            verdict=final_overall_v.value,
+            confidence=final_conf_score,
             original_input=request.input_text,
             input_type=request.input_type,
-            overall_verdict=final_judge_res["overall_verdict"],
-            confidence_score=final_judge_res["confidence_score"],
-            summary=final_judge_res["summary"],
+            overall_verdict=final_overall_v,
+            confidence_score=final_conf_score,
+            summary=final_summary,
             key_context=final_judge_res.get("key_context"),
             limitations=final_judge_res.get("limitations"),
+            url_authenticity=url_authenticity_res,
             claims=extracted_claims,
             supporting_evidence=sup_ev,
             contradicting_evidence=con_ev,

@@ -56,41 +56,110 @@ export const ResultsDashboardPage: React.FC<ResultsDashboardPageProps> = ({ data
         </a>
       </div>
 
-      {/* TOP GRID: OVERALL VERDICT & EVIDENCE BALANCE */}
+      {/* TOP GRID: OVERALL VERDICT / URL AUTHENTICITY & EVIDENCE BALANCE */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         
-        {/* OVERALL VERDICT CARD */}
+        {/* OVERALL VERDICT OR URL AUTHENTICITY CARD */}
         <div className="md:col-span-2 glass-panel p-8 rounded-3xl border border-slate-800 shadow-2xl flex flex-col justify-between space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
-            <div>
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Overall Verdict</span>
-              <div className="mt-2">
-                <VerdictBadge verdict={data.overall_verdict} size="lg" />
+          
+          {data.url_authenticity ? (
+            /* DEDICATED URL AUTHENTICITY BADGE & METRICS */
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div>
+                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">URL Authenticity Status</span>
+                  <div className="mt-2 flex items-center space-x-3">
+                    <span className={`inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-extrabold border ${
+                      data.url_authenticity.is_authentic 
+                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/60 shadow-lg shadow-emerald-950/40' 
+                        : 'bg-rose-950/80 text-rose-300 border-rose-500/60'
+                    }`}>
+                      <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                      <span>{data.url_authenticity.status}</span>
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-4 bg-slate-900/80 p-4 rounded-2xl border border-slate-800">
+                  <div className="text-center">
+                    <div className="text-2xl font-black text-white">{data.url_authenticity.reputation_score}%</div>
+                    <div className="text-[10px] text-slate-400 uppercase font-semibold">Domain Trust</div>
+                  </div>
+                  <div className="w-12 h-12 rounded-full border-4 border-emerald-500/40 flex items-center justify-center font-bold text-xs text-emerald-300">
+                    {data.url_authenticity.reputation_score}%
+                  </div>
+                </div>
+              </div>
+
+              {/* URL AUTHENTICITY DETAILS GRID */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
+                  <div className="text-slate-400 text-[10px] uppercase font-semibold">Domain</div>
+                  <div className="font-bold text-white mt-0.5 truncate">{data.url_authenticity.domain}</div>
+                </div>
+                <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
+                  <div className="text-slate-400 text-[10px] uppercase font-semibold">HTTPS / SSL</div>
+                  <div className={`font-bold mt-0.5 ${data.url_authenticity.has_ssl ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {data.url_authenticity.has_ssl ? 'VALID' : 'UNENCRYPTED'}
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
+                  <div className="text-slate-400 text-[10px] uppercase font-semibold">Reachable</div>
+                  <div className={`font-bold mt-0.5 ${data.url_authenticity.is_reachable ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {data.url_authenticity.is_reachable ? 'YES' : 'NO'}
+                  </div>
+                </div>
+                <div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
+                  <div className="text-slate-400 text-[10px] uppercase font-semibold">Classification</div>
+                  <div className="font-bold text-cyan-300 mt-0.5 truncate">{data.url_authenticity.domain_classification}</div>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <div className="font-bold text-slate-300">Security & Trust Audit Notes:</div>
+                <ul className="space-y-1 text-slate-400 pl-4 list-disc">
+                  {data.url_authenticity.security_notes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
               </div>
             </div>
+          ) : (
+            /* STANDARD CLAIM OVERALL VERDICT */
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+                <div>
+                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Overall Verdict</span>
+                  <div className="mt-2">
+                    <VerdictBadge verdict={data.overall_verdict} size="lg" />
+                  </div>
+                </div>
 
-            <div className="flex items-center space-x-4 bg-slate-900/80 p-4 rounded-2xl border border-slate-800">
-              <div className="text-center">
-                <div className="text-2xl font-black text-white">{data.confidence_score}%</div>
-                <div className="text-[10px] text-slate-400 uppercase font-semibold">Confidence</div>
+                <div className="flex items-center space-x-4 bg-slate-900/80 p-4 rounded-2xl border border-slate-800">
+                  <div className="text-center">
+                    <div className="text-2xl font-black text-white">{data.confidence_score}%</div>
+                    <div className="text-[10px] text-slate-400 uppercase font-semibold">Confidence</div>
+                  </div>
+                  <div className="w-12 h-12 rounded-full border-4 border-cyan-500/40 flex items-center justify-center font-bold text-xs text-cyan-300">
+                    {data.confidence_score}%
+                  </div>
+                </div>
               </div>
-              <div className="w-12 h-12 rounded-full border-4 border-cyan-500/40 flex items-center justify-center font-bold text-xs text-cyan-300">
-                {data.confidence_score}%
+
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-slate-200">Executive Summary</h3>
+                <p className="text-sm text-slate-300 leading-relaxed">
+                  {data.summary}
+                </p>
+                {data.key_context && (
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400">
+                    <strong>Important Context:</strong> {data.key_context}
+                  </div>
+                )}
               </div>
             </div>
-          </div>
+          )}
 
-          <div className="space-y-3">
-            <h3 className="text-sm font-bold text-slate-200">Executive Summary</h3>
-            <p className="text-sm text-slate-300 leading-relaxed">
-              {data.summary}
-            </p>
-            {data.key_context && (
-              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400">
-                <strong>Important Context:</strong> {data.key_context}
-              </div>
-            )}
-          </div>
         </div>
 
         {/* EVIDENCE BALANCE VISUAL CARD */}

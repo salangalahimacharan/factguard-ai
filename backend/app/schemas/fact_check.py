@@ -117,6 +117,22 @@ class AgentLog(BaseModel):
     execution_time_ms: float
     created_at: str
 
+class URLAuthenticityStatus(str, Enum):
+    AUTHENTIC = "VERIFIED / AUTHENTIC"
+    SUSPICIOUS = "SUSPICIOUS"
+    UNREACHABLE = "UNREACHABLE / INVALID"
+
+class URLAuthenticityResult(BaseModel):
+    url: str
+    domain: str
+    status: URLAuthenticityStatus
+    is_authentic: bool
+    is_reachable: bool
+    has_ssl: bool
+    domain_classification: str
+    reputation_score: float = Field(default=50.0, ge=0.0, le=100.0)
+    security_notes: List[str] = Field(default_factory=list)
+
 class FactCheckResponse(BaseModel):
     id: str
     status: str = "success"
@@ -129,6 +145,7 @@ class FactCheckResponse(BaseModel):
     summary: str
     key_context: Optional[str] = None
     limitations: Optional[str] = None
+    url_authenticity: Optional[URLAuthenticityResult] = None
     claims: List[ClaimExtractionItem] = Field(default_factory=list)
     supporting_evidence: List[EvidenceItem] = Field(default_factory=list)
     contradicting_evidence: List[EvidenceItem] = Field(default_factory=list)

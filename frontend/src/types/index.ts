@@ -109,6 +109,18 @@ export interface AgentLog {
   created_at: string;
 }
 
+export interface URLAuthenticityResult {
+  url: string;
+  domain: string;
+  status: 'VERIFIED / AUTHENTIC' | 'SUSPICIOUS' | 'UNREACHABLE / INVALID';
+  is_authentic: boolean;
+  is_reachable: boolean;
+  has_ssl: boolean;
+  domain_classification: string;
+  reputation_score: number;
+  security_notes: string[];
+}
+
 export interface FactCheckResponse {
   id: string;
   original_input: string;
@@ -118,6 +130,7 @@ export interface FactCheckResponse {
   summary: string;
   key_context?: string;
   limitations?: string;
+  url_authenticity?: URLAuthenticityResult;
   extracted_claims: ClaimExtractionItem[];
   claim_verdicts: ClaimVerdict[];
   sources: SourceMetadata[];
