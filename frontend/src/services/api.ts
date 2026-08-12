@@ -49,11 +49,11 @@ export async function verifyUrl(url: string): Promise<FactCheckResponse> {
       signal: controller.signal
     });
 
-    // Strategy 2: If JSON fails, try FormData to /fact-check/url
+    // Strategy 2: If JSON fails, try FormData to /fact-check/url/form
     if (!response.ok) {
       const formData = new FormData();
       formData.append('url', cleanUrl);
-      response = await fetch(`${API_BASE_URL}/fact-check/url`, {
+      response = await fetch(`${API_BASE_URL}/fact-check/url/form`, {
         method: 'POST',
         body: formData,
         signal: controller.signal

@@ -56,15 +56,14 @@ async def create_fact_check(
 
 @router.post("/url", response_model=FactCheckResponse)
 async def create_fact_check_url(
-    url: Optional[str] = Form(None),
-    payload: Optional[URLFactCheckPayload] = None,
+    payload: URLFactCheckPayload,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Scrape target article/social media URL and execute multi-agent fact check.
-    Supports Form Data and JSON payloads.
+    Receives JSON payload: { "url": "https://..." }
     """
-    target_url = url or (payload.url if payload else None)
+    target_url = payload.url
     if not target_url or not target_url.strip():
         raise HTTPException(status_code=400, detail="Target URL must be provided.")
 
@@ -86,6 +85,17 @@ async def create_fact_check_url(
     except Exception as e:
         logger.error(f"URL fact check failed for '{target_url}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Multi-agent workflow error: {str(e)}")
+
+@router.post("/url/form", response_model=FactCheckResponse)
+async def create_fact_check_url_form(
+    url: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Form-data endpoint for URL verification.
+    """
+    payload = URLFactCheckPayload(url=url)
+    return await create_fact_check_url(payload=payload, db=db)
 
 @router.post("/image", response_model=FactCheckResponse)
 async def create_fact_check_image(
