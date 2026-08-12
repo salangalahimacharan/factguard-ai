@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 import httpx
 from typing import Dict, Any, Optional
 from app.config import settings
@@ -10,7 +11,7 @@ logger = logging.getLogger("factguard.llm")
 class LLMClient:
     """
     Unified LLM Client supporting Google Gemini, OpenAI, and heuristic fallbacks.
-    Guarantees structured JSON outputs for all agents.
+    Guarantees structured JSON outputs for all agents with strict 6s timeout protection.
     """
     def __init__(self):
         self.provider = settings.LLM_PROVIDER.lower()
@@ -29,7 +30,7 @@ class LLMClient:
                 if parsed:
                     return parsed
             except Exception as e:
-                logger.warning(f"Gemini API call failed: {e}. Trying fallback.")
+                logger.warning(f"Gemini API call failed or timed out: {e}. Trying fallback.")
 
         # Try OpenAI API if key exists
         if self.openai_key:
@@ -39,7 +40,7 @@ class LLMClient:
                 if parsed:
                     return parsed
             except Exception as e:
-                logger.warning(f"OpenAI API call failed: {e}. Trying fallback.")
+                logger.warning(f"OpenAI API call failed or timed out: {e}. Trying fallback.")
 
         # Fallback to local heuristic engine if LLM API is unavailable
         logger.info("Using built-in heuristic reasoning engine for structured output.")
@@ -60,8 +61,9 @@ class LLMClient:
             }
         }
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
+        timeout_cfg = httpx.Timeout(6.0, connect=3.0, read=6.0)
+        async with httpx.AsyncClient(timeout=timeout_cfg) as client:
+            resp = await asyncio.wait_for(client.post(url, json=payload, headers=headers), timeout=6.0)
             resp.raise_for_status()
             data = resp.json()
             return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -84,8 +86,9 @@ class LLMClient:
             "temperature": 0.2
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
+        timeout_cfg = httpx.Timeout(6.0, connect=3.0, read=6.0)
+        async with httpx.AsyncClient(timeout=timeout_cfg) as client:
+            resp = await asyncio.wait_for(client.post(url, json=payload, headers=headers), timeout=6.0)
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
