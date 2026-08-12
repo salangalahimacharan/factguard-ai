@@ -9,7 +9,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://factguard-ai.
 
 export async function verifyText(text: string): Promise<FactCheckResponse> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
 
   try {
     const response = await fetch(`${API_BASE_URL}/fact-check`, {
@@ -40,7 +40,7 @@ export async function verifyUrl(url: string): Promise<FactCheckResponse> {
   formData.append('url', cleanUrl);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
 
   try {
     const response = await fetch(`${API_BASE_URL}/fact-check/url`, {
@@ -69,7 +69,7 @@ export async function verifyImage(file: File): Promise<FactCheckResponse> {
   formData.append('file', file);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
 
   try {
     const response = await fetch(`${API_BASE_URL}/fact-check/image`, {

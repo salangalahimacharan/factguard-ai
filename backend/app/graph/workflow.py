@@ -59,10 +59,15 @@ class MultiAgentOrchestrator:
         if not extracted_claims:
             extracted_claims = [ClaimExtractionItem(
                 claim_id="C001",
-                claim_text=request.input_text,
+                claim_text=request.input_text[:500],
                 is_verifiable=True,
                 category="General"
             )]
+
+        # Cap extracted claims to top 3 to guarantee ultra-fast analysis
+        if len(extracted_claims) > 3:
+            logger.info(f"Capping extracted claims from {len(extracted_claims)} to top 3 for speed optimization.")
+            extracted_claims = extracted_claims[:3]
 
         logger.info(f"EXTRACTED CLAIMS COUNT: {len(extracted_claims)}")
         for idx, claim_item in enumerate(extracted_claims):
@@ -73,16 +78,13 @@ class MultiAgentOrchestrator:
         claim_consistency_dict: Dict[str, ConsistencyCheckResult] = {}
         all_flattened_sources: List[SourceMetadata] = []
 
-        # Process claims sequentially or concurrently
-        for claim in extracted_claims:
+        async def _process_single_claim(claim: ClaimExtractionItem):
+            c_logs: List[AgentLog] = []
             # Agent 2: Research & Web Retrieval Agent
             a2_start = time.time()
             sources = await research_agent.run(claim)
             a2_time = round((time.time() - a2_start) * 1000, 2)
-            all_flattened_sources.extend(sources)
-            claim_sources_dict[claim.claim_id] = sources
-
-            agent_logs.append(AgentLog(
+            c_logs.append(AgentLog(
                 id=str(uuid.uuid4()),
                 agent_name="Research & Web Retrieval Agent",
                 status="completed",
@@ -91,16 +93,11 @@ class MultiAgentOrchestrator:
                 created_at=datetime.utcnow().isoformat()
             ))
 
-            logger.info(f"RETRIEVED SOURCES FOR CLAIM {claim.claim_id}: {len(sources)} items.")
-            for src in sources[:3]:
-                logger.info(f"   Source [{src.publisher}]: {src.excerpt[:100]}...")
-
             # Agent 4: Source Credibility Agent
             a4_start = time.time()
             sources = await source_credibility_agent.run(sources)
             a4_time = round((time.time() - a4_start) * 1000, 2)
-            claim_sources_dict[claim.claim_id] = sources
-            agent_logs.append(AgentLog(
+            c_logs.append(AgentLog(
                 id=str(uuid.uuid4()),
                 agent_name="Source Credibility Agent",
                 status="completed",
@@ -113,8 +110,7 @@ class MultiAgentOrchestrator:
             a3_start = time.time()
             evidence_analysis = await evidence_verifier_agent.run(claim, sources)
             a3_time = round((time.time() - a3_start) * 1000, 2)
-            claim_evidence_dict[claim.claim_id] = evidence_analysis
-            agent_logs.append(AgentLog(
+            c_logs.append(AgentLog(
                 id=str(uuid.uuid4()),
                 agent_name="Evidence Verification Agent",
                 status="completed",
@@ -123,16 +119,11 @@ class MultiAgentOrchestrator:
                 created_at=datetime.utcnow().isoformat()
             ))
 
-            logger.info(f"EVIDENCE CLASSIFICATION FOR CLAIM {claim.claim_id}:")
-            logger.info(f"   Supporting Evidence Count: {len(evidence_analysis.supporting_evidence)}")
-            logger.info(f"   Contradicting Evidence Count: {len(evidence_analysis.contradicting_evidence)}")
-
             # Agent 6: Cross-Source Consistency Agent
             a6_start = time.time()
             consistency_res = await consistency_checker_agent.run(claim, sources, evidence_analysis)
             a6_time = round((time.time() - a6_start) * 1000, 2)
-            claim_consistency_dict[claim.claim_id] = consistency_res
-            agent_logs.append(AgentLog(
+            c_logs.append(AgentLog(
                 id=str(uuid.uuid4()),
                 agent_name="Cross-Source Consistency Agent",
                 status="completed",
@@ -141,18 +132,38 @@ class MultiAgentOrchestrator:
                 created_at=datetime.utcnow().isoformat()
             ))
 
-        # Agent 5: Bias & Manipulation Detection Agent
-        a5_start = time.time()
-        bias_analysis = await bias_detector_agent.run(request.input_text)
-        a5_time = round((time.time() - a5_start) * 1000, 2)
-        agent_logs.append(AgentLog(
-            id=str(uuid.uuid4()),
-            agent_name="Bias & Manipulation Agent",
-            status="completed",
-            message=f"Analyzed text for bias/manipulation. Bias Score: {bias_analysis.bias_score}.",
-            execution_time_ms=a5_time,
-            created_at=datetime.utcnow().isoformat()
-        ))
+            return claim, sources, evidence_analysis, consistency_res, c_logs
+
+        async def _run_bias_agent():
+            a5_start = time.time()
+            bias_res = await bias_detector_agent.run(request.input_text)
+            a5_time = round((time.time() - a5_start) * 1000, 2)
+            b_log = AgentLog(
+                id=str(uuid.uuid4()),
+                agent_name="Bias & Manipulation Agent",
+                status="completed",
+                message=f"Analyzed text for bias/manipulation. Bias Score: {bias_res.bias_score}.",
+                execution_time_ms=a5_time,
+                created_at=datetime.utcnow().isoformat()
+            )
+            return bias_res, b_log
+
+        # Execute per-claim pipelines and bias agent concurrently!
+        claim_tasks = [_process_single_claim(claim) for claim in extracted_claims]
+        bias_task = _run_bias_agent()
+
+        all_results = await asyncio.gather(*claim_tasks, bias_task)
+        claim_results = all_results[:-1]
+        bias_analysis, bias_log = all_results[-1]
+
+        for claim, sources, evidence_analysis, consistency_res, c_logs in claim_results:
+            all_flattened_sources.extend(sources)
+            claim_sources_dict[claim.claim_id] = sources
+            claim_evidence_dict[claim.claim_id] = evidence_analysis
+            claim_consistency_dict[claim.claim_id] = consistency_res
+            agent_logs.extend(c_logs)
+
+        agent_logs.append(bias_log)
 
         # Agent 7: Final Synthesis & Verdict Agent
         a7_start = time.time()

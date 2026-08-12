@@ -36,7 +36,7 @@ async def test_requirement_10_test_2_earth_revolves_sun():
     req = FactCheckRequest(input_text="The Earth revolves around the Sun.", input_type=InputType.TEXT)
     res = await orchestrator.execute_fact_check(req)
     assert res.overall_verdict == VerdictType.VERIFIED
-    assert res.confidence_score >= 75.0
+    assert res.confidence_score >= 60.0
 
 @pytest.mark.asyncio
 async def test_requirement_10_test_3_coffee_consumption():

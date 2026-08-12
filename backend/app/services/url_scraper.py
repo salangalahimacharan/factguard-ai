@@ -34,7 +34,7 @@ class URLScraperService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, verify=False) as client:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 
@@ -53,12 +53,12 @@ class URLScraperService:
 
                 # Extract main article paragraphs
                 paragraphs = [p.get_text().strip() for p in soup.find_all("p") if len(p.get_text().strip()) > 25]
-                body_text = "\n\n".join(paragraphs[:15])
+                body_text = "\n\n".join(paragraphs[:8])
 
                 if not body_text:
-                    body_text = soup.get_text()[:2500]
+                    body_text = soup.get_text()[:1500]
 
-                clean_body = re.sub(r'\s+', ' ', body_text).strip()
+                clean_body = re.sub(r'\s+', ' ', body_text).strip()[:1500]
                 if len(clean_body) < 20:
                     clean_body = f"Target page content from {url}"
 
