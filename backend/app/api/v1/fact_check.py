@@ -40,13 +40,7 @@ async def create_fact_check(
     
     # Auto-detect URL input in main endpoint
     if request.input_type == InputType.URL or text_input.startswith("http://") or text_input.startswith("https://") or (text_input.startswith("www.") and len(text_input.split()) == 1):
-        target_u = text_input
-        try:
-            title, content = await url_scraper_service.fetch_url_content(target_u)
-            request = FactCheckRequest(input_text=f"URL: {target_u}\n\n{content}", input_type=InputType.URL)
-        except Exception as e:
-            logger.warning(f"Auto URL fetch fallback: {e}")
-            request = FactCheckRequest(input_text=f"URL: {target_u}\n\nContent unreachable.", input_type=InputType.URL)
+        request = FactCheckRequest(input_text=text_input, input_type=InputType.URL)
 
     try:
         response = await orchestrator.execute_fact_check(request, db_session=db)
