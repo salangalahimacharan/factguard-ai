@@ -67,15 +67,23 @@ class ResearchAgent:
 
     def _generate_search_queries(self, claim: ClaimExtractionItem) -> Dict[str, str]:
         claim_text = claim.claim_text
+        if claim_text.startswith("http://") or claim_text.startswith("https://") or "URL:" in claim_text or "http" in claim_text:
+            url_match = re.search(r'https?://[^\s]+', claim_text)
+            if url_match:
+                parsed = urllib.parse.urlparse(url_match.group(0))
+                domain_parts = [p for p in parsed.netloc.split('.') if p not in ['www', 'com', 'org', 'gov', 'net', 'edu', 'int', 'io', 'ai']]
+                claim_text = " ".join(domain_parts) if domain_parts else parsed.netloc
+            else:
+                claim_text = re.sub(r'https?://[^\s]+', '', claim_text).strip()
         
         # Clean search terms without quotes
         clean_text = re.sub(r'[^\w\s]', ' ', claim_text)
         words = [w for w in clean_text.split() if len(w) > 2]
-        keywords = " ".join(words[:8])
+        keywords = " ".join(words[:8]) or "general claim verification"
 
         # Multi-query strategy for reliable evidence retrieval
         queries = {
-            "direct_claim": f"{claim_text}".strip(),
+            "direct_claim": f"{keywords}".strip(),
             "fact_check": f"{keywords} fact check debunk evidence".strip(),
             "scientific_truth": f"{keywords} science research evidence".strip()
         }
