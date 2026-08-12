@@ -23,12 +23,14 @@ class ResearchAgent:
         # Generate targeted search query strategies
         queries = self._generate_search_queries(claim)
         
-        raw_results: List[Dict[str, Any]] = []
+        # Execute search queries concurrently in parallel!
+        search_tasks = [self._execute_search(q, qt) for qt, q in queries.items()]
+        query_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-        # Execute search query variations
-        for query_type, q in queries.items():
-            results = await self._execute_search(q, query_type)
-            raw_results.extend(results)
+        raw_results: List[Dict[str, Any]] = []
+        for res_list in query_results:
+            if isinstance(res_list, list):
+                raw_results.extend(res_list)
 
         # Deduplicate results by normalized URL
         seen_urls = set()
@@ -80,32 +82,17 @@ class ResearchAgent:
         return queries
 
     async def _execute_search(self, query: str, query_type: str) -> List[Dict[str, Any]]:
+        # Run search engines concurrently in parallel!
+        tasks = [
+            self._search_duckduckgo_html(query),
+            self._search_wikipedia(query),
+            self._search_google_news_rss(query)
+        ]
+        engine_results = await asyncio.gather(*tasks, return_exceptions=True)
         results = []
-        
-        # Engine 1: DuckDuckGo HTML Direct Scraper
-        try:
-            ddg_results = await self._search_duckduckgo_html(query)
-            if ddg_results:
-                results.extend(ddg_results)
-        except Exception as e:
-            logger.debug(f"DuckDuckGo HTML search exception for '{query}': {e}")
-
-        # Engine 2: Wikipedia Search API
-        try:
-            wiki_results = await self._search_wikipedia(query)
-            if wiki_results:
-                results.extend(wiki_results)
-        except Exception as e:
-            logger.debug(f"Wikipedia API exception for '{query}': {e}")
-
-        # Engine 3: Google News RSS
-        try:
-            news_results = await self._search_google_news_rss(query)
-            if news_results:
-                results.extend(news_results)
-        except Exception as e:
-            logger.debug(f"Google News RSS exception for '{query}': {e}")
-
+        for r in engine_results:
+            if isinstance(r, list):
+                results.extend(r)
         return results
 
     async def _search_duckduckgo_html(self, query: str) -> List[Dict[str, Any]]:
@@ -117,37 +104,40 @@ class ResearchAgent:
         }
         data = {"q": query}
 
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.post(url, data=data, headers=headers)
-            if resp.status_code != 200:
-                return []
+        try:
+            async with httpx.AsyncClient(timeout=3.5, follow_redirects=True) as client:
+                resp = await client.post(url, data=data, headers=headers)
+                if resp.status_code != 200:
+                    return []
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-            results = []
+                soup = BeautifulSoup(resp.text, "html.parser")
+                results = []
 
-            for result in soup.select(".result"):
-                title_elem = result.select_one(".result__title a")
-                snippet_elem = result.select_one(".result__snippet")
-                url_elem = result.select_one(".result__url")
+                for result in soup.select(".result"):
+                    title_elem = result.select_one(".result__title a")
+                    snippet_elem = result.select_one(".result__snippet")
 
-                if not title_elem:
-                    continue
+                    if not title_elem:
+                        continue
 
-                raw_href = title_elem.get("href", "")
-                actual_url = self._clean_ddg_url(raw_href)
+                    raw_href = title_elem.get("href", "")
+                    actual_url = self._clean_ddg_url(raw_href)
 
-                if actual_url and actual_url.startswith("http"):
-                    results.append({
-                        "title": title_elem.get_text(strip=True),
-                        "url": actual_url,
-                        "snippet": snippet_elem.get_text(strip=True) if snippet_elem else "",
-                        "publisher": self._extract_domain(actual_url)
-                    })
+                    if actual_url and actual_url.startswith("http"):
+                        results.append({
+                            "title": title_elem.get_text(strip=True),
+                            "url": actual_url,
+                            "snippet": snippet_elem.get_text(strip=True) if snippet_elem else "",
+                            "publisher": self._extract_domain(actual_url)
+                        })
 
-                if len(results) >= 5:
-                    break
+                    if len(results) >= 4:
+                        break
 
-            return results
+                return results
+        except Exception as e:
+            logger.debug(f"DuckDuckGo search error: {e}")
+            return []
 
     async def _search_wikipedia(self, query: str) -> List[Dict[str, Any]]:
         url = "https://en.wikipedia.org/w/api.php"
@@ -161,56 +151,64 @@ class ResearchAgent:
         }
         headers = {"User-Agent": "FactGuardAI/1.0 (academic; project@factguard.ai)"}
 
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(url, params=params, headers=headers)
-            if resp.status_code != 200:
-                return []
+        try:
+            async with httpx.AsyncClient(timeout=3.5) as client:
+                resp = await client.get(url, params=params, headers=headers)
+                if resp.status_code != 200:
+                    return []
 
-            data = resp.json()
-            search_items = data.get("query", {}).get("search", [])
-            results = []
+                data = resp.json()
+                search_items = data.get("query", {}).get("search", [])
+                results = []
 
-            for item in search_items:
-                title = item.get("title", "")
-                snippet_raw = item.get("snippet", "")
-                clean_snippet = BeautifulSoup(snippet_raw, "html.parser").get_text(strip=True)
+                for item in search_items:
+                    title = item.get("title", "")
+                    snippet_raw = item.get("snippet", "")
+                    clean_snippet = BeautifulSoup(snippet_raw, "html.parser").get_text(strip=True)
 
-                wiki_url = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
-                results.append({
-                    "title": f"Wikipedia: {title}",
-                    "url": wiki_url,
-                    "snippet": clean_snippet,
-                    "publisher": "Wikipedia Encyclopedia"
-                })
-            return results
+                    wiki_url = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
+                    results.append({
+                        "title": f"Wikipedia: {title}",
+                        "url": wiki_url,
+                        "snippet": clean_snippet,
+                        "publisher": "Wikipedia Encyclopedia"
+                    })
+                return results
+        except Exception as e:
+            logger.debug(f"Wikipedia search error: {e}")
+            return []
 
     async def _search_google_news_rss(self, query: str) -> List[Dict[str, Any]]:
         encoded_query = urllib.parse.quote(query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
         headers = {"User-Agent": USER_AGENT}
 
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(rss_url, headers=headers)
-            if resp.status_code != 200:
-                return []
+        try:
+            async with httpx.AsyncClient(timeout=3.5) as client:
+                resp = await client.get(rss_url, headers=headers)
+                if resp.status_code != 200:
+                    return []
 
-            soup = BeautifulSoup(resp.text, "xml")
-            results = []
+                soup = BeautifulSoup(resp.text, "xml")
+                results = []
 
-            for item in soup.find_all("item")[:4]:
-                title = item.find("title").get_text(strip=True) if item.find("title") else ""
-                link = item.find("link").get_text(strip=True) if item.find("link") else ""
-                pub_date = item.find("pubDate").get_text(strip=True) if item.find("pubDate") else None
+                for item in soup.find_all("item")[:3]:
+                    title = item.find("title").get_text(strip=True) if item.find("title") else ""
+                    link = item.find("link").get_text(strip=True) if item.find("link") else ""
+                    pub_date = item.find("pubDate").get_text(strip=True) if item.find("pubDate") else None
 
-                if link:
-                    results.append({
-                        "title": title,
-                        "url": link,
-                        "snippet": title,
-                        "publisher": self._extract_domain(link),
-                        "date": pub_date
-                    })
-            return results
+                    if link:
+                        results.append({
+                            "title": title,
+                            "url": link,
+                            "snippet": title,
+                            "publisher": self._extract_domain(link),
+                            "date": pub_date
+                        })
+                return results
+        except Exception as e:
+            logger.debug(f"Google News RSS error: {e}")
+            return []
 
     def _clean_ddg_url(self, raw_url: str) -> str:
         if "uddg=" in raw_url:
