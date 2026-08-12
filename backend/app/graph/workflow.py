@@ -67,8 +67,11 @@ class MultiAgentOrchestrator:
                 created_at=datetime.utcnow().isoformat()
             ))
 
-            # Fast-path return for explicit pure URL Verification requests
-            is_pure_url = request.input_type == InputType.URL and len(request.input_text.strip().split()) <= 2
+            # Fast-path return for explicit pure URL Verification requests (single URL string)
+            is_pure_url = (
+                (request.input_type == InputType.URL or request.input_text.strip().startswith("http://") or request.input_text.strip().startswith("https://") or request.input_text.strip().startswith("www.")) and
+                len(request.input_text.strip().split()) <= 2
+            )
             if is_pure_url:
                 v_verdict = VerdictType.VERIFIED if url_authenticity_res.is_authentic else (
                     VerdictType.UNCERTAIN if url_authenticity_res.status == URLAuthenticityStatus.TIMEOUT else VerdictType.FALSE
