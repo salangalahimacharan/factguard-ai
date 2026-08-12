@@ -2,7 +2,7 @@ import time
 import logging
 from typing import List, Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -27,7 +27,7 @@ class URLFactCheckPayload(BaseModel):
 
 @router.post("", response_model=FactCheckResponse)
 async def create_fact_check(
-    request: FactCheckRequest,
+    request: FactCheckRequest = Body(...),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -51,7 +51,7 @@ async def create_fact_check(
 
 @router.post("/url", response_model=FactCheckResponse)
 async def create_fact_check_url(
-    payload: URLFactCheckPayload,
+    payload: URLFactCheckPayload = Body(...),
     db: AsyncSession = Depends(get_db)
 ):
     """
