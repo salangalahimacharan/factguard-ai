@@ -1,6 +1,6 @@
 # FactGuard AI — Multi-Agent AI Fact-Checking Platform
 
-Live Project : https://factguard-ai-eight.vercel.app/
+Live Project : https://factguard-ai.ai.studio/
 
 
 > **B.Tech Final-Year Academic Project Demonstration**  
